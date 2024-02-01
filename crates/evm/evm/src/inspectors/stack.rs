@@ -16,6 +16,8 @@ use revm::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+use crate::inspectors::customizable::Customizable;
+
 #[derive(Clone, Debug, Default)]
 #[must_use = "builders do nothing unless you call `build` on them"]
 pub struct InspectorStackBuilder {
@@ -191,6 +193,7 @@ pub struct InspectorData {
     pub cheatcodes: Option<Cheatcodes>,
     pub script_wallets: Vec<LocalWallet>,
     pub chisel_state: Option<(Stack, Vec<u8>, InstructionResult)>,
+    pub customizable: Option<Customizable>,
 }
 
 /// An inspector that calls multiple inspectors in sequence.
@@ -207,6 +210,7 @@ pub struct InspectorStack {
     pub log_collector: Option<LogCollector>,
     pub printer: Option<TracePrinter>,
     pub tracer: Option<TracingInspector>,
+    pub customizable: Option<Customizable>,
 }
 
 impl InspectorStack {
@@ -324,6 +328,7 @@ impl InspectorStack {
                 .unwrap_or_default(),
             cheatcodes: self.cheatcodes,
             chisel_state: self.chisel_state.and_then(|state| state.state),
+            customizable: self.customizable,
         }
     }
 
@@ -343,7 +348,8 @@ impl InspectorStack {
                 &mut self.coverage,
                 &mut self.log_collector,
                 &mut self.cheatcodes,
-                &mut self.printer
+                &mut self.printer,
+                &mut self.customizable
             ],
             |inspector| {
                 let (new_status, new_gas, new_retdata) =
@@ -373,7 +379,8 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
                 &mut self.tracer,
                 &mut self.log_collector,
                 &mut self.cheatcodes,
-                &mut self.printer
+                &mut self.printer,
+                &mut self.customizable
             ],
             |inspector| {
                 inspector.initialize_interp(interpreter, data);
@@ -397,7 +404,8 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
                 &mut self.coverage,
                 &mut self.log_collector,
                 &mut self.cheatcodes,
-                &mut self.printer
+                &mut self.printer,
+                &mut self.customizable
             ],
             |inspector| {
                 inspector.step(interpreter, data);
@@ -419,7 +427,13 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
         data: &Bytes,
     ) {
         call_inspectors!(
-            [&mut self.tracer, &mut self.log_collector, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.cheatcodes,
+                &mut self.printer,
+                &mut self.customizable
+            ],
             |inspector| {
                 inspector.log(evm_data, address, topics, data);
             }
@@ -435,7 +449,8 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
                 &mut self.log_collector,
                 &mut self.cheatcodes,
                 &mut self.printer,
-                &mut self.chisel_state
+                &mut self.chisel_state,
+                &mut self.customizable
             ],
             |inspector| {
                 inspector.step_end(interpreter, data);
@@ -462,7 +477,8 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
                 &mut self.coverage,
                 &mut self.log_collector,
                 &mut self.cheatcodes,
-                &mut self.printer
+                &mut self.printer,
+                &mut self.customizable
             ],
             |inspector| {
                 let (status, gas, retdata) = inspector.call(data, call);
@@ -512,7 +528,8 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
                 &mut self.coverage,
                 &mut self.log_collector,
                 &mut self.cheatcodes,
-                &mut self.printer
+                &mut self.printer,
+                &mut self.customizable
             ],
             |inspector| {
                 let (status, addr, gas, retdata) = inspector.create(data, call);
@@ -543,7 +560,8 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
                 &mut self.coverage,
                 &mut self.log_collector,
                 &mut self.cheatcodes,
-                &mut self.printer
+                &mut self.printer,
+                &mut self.customizable
             ],
             |inspector| {
                 let (new_status, new_address, new_gas, new_retdata) = inspector.create_end(
@@ -572,7 +590,8 @@ impl<DB: DatabaseExt> Inspector<DB> for InspectorStack {
                 &mut self.log_collector,
                 &mut self.cheatcodes,
                 &mut self.printer,
-                &mut self.chisel_state
+                &mut self.chisel_state,
+                &mut self.customizable
             ],
             |inspector| {
                 Inspector::<DB>::selfdestruct(inspector, contract, target, value);

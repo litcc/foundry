@@ -115,6 +115,9 @@ impl RunArgs {
         // we need to fork off the parent block
         config.fork_block_number = Some(tx_block_number - 1);
 
+        println!("config {}", serde_json::to_string(&config).expect("配置转换为json错误"));
+        println!("evm_opts {}", serde_json::to_string(&evm_opts).expect("配置转换为json错误"));
+
         let (mut env, fork, chain) = TracingExecutor::get_fork_material(&config, evm_opts).await?;
 
         let mut executor =

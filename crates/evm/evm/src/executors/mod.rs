@@ -7,7 +7,7 @@
 // the concrete `Executor` type.
 
 use crate::inspectors::{
-    cheatcodes::BroadcastableTransactions, Cheatcodes, InspectorData, InspectorStack,
+    cheatcodes::BroadcastableTransactions, Cheatcodes, Customizable, InspectorData, InspectorStack,
 };
 use alloy_dyn_abi::{DynSolValue, FunctionExt, JsonAbiExt};
 use alloy_json_abi::{Function, JsonAbi};
@@ -31,6 +31,7 @@ use revm::{
     primitives::{
         BlockEnv, Bytecode, Env, ExecutionResult, Output, ResultAndState, SpecId, TransactTo, TxEnv,
     },
+    Inspector,
 };
 use std::collections::HashMap;
 
@@ -375,6 +376,7 @@ impl Executor {
             script_wallets,
             env,
             coverage,
+            customizable,
             ..
         } = result;
 
@@ -429,7 +431,17 @@ impl Executor {
 
         trace!(address=?address, "deployed contract");
 
-        Ok(DeployResult { address, gas_used, gas_refunded, logs, traces, debug, env, coverage })
+        Ok(DeployResult {
+            address,
+            gas_used,
+            gas_refunded,
+            logs,
+            traces,
+            debug,
+            env,
+            coverage,
+            customizable,
+        })
     }
 
     /// Deploys a contract and commits the new state to the underlying database.
@@ -633,6 +645,7 @@ pub struct DeployResult {
     pub env: Env,
     /// The coverage info collected during the deployment
     pub coverage: Option<HitMaps>,
+    pub customizable: Option<Customizable>,
 }
 
 /// The result of a call.
@@ -672,6 +685,7 @@ pub struct CallResult {
     pub env: Env,
     /// breakpoints
     pub breakpoints: Breakpoints,
+    pub customizable: Option<Customizable>,
 }
 
 /// The result of a raw call.
@@ -721,6 +735,8 @@ pub struct RawCallResult {
     pub out: Option<Output>,
     /// The chisel state
     pub chisel_state: Option<(Stack, Vec<u8>, InstructionResult)>,
+
+    pub customizable: Option<Customizable>,
 }
 
 impl Default for RawCallResult {
@@ -745,6 +761,7 @@ impl Default for RawCallResult {
             cheatcodes: Default::default(),
             out: None,
             chisel_state: None,
+            customizable: None,
         }
     }
 }
@@ -791,6 +808,7 @@ fn convert_executed_result(
         cheatcodes,
         script_wallets,
         chisel_state,
+        customizable,
     } = inspector.collect();
 
     let transactions = match cheatcodes.as_ref() {
@@ -820,6 +838,7 @@ fn convert_executed_result(
         cheatcodes,
         out,
         chisel_state,
+        customizable,
     })
 }
 
@@ -844,6 +863,7 @@ fn convert_call_result(
         state_changeset,
         script_wallets,
         env,
+        customizable,
         ..
     } = call_result;
 
@@ -879,6 +899,7 @@ fn convert_call_result(
                 env,
                 breakpoints,
                 skipped: false,
+                customizable,
             })
         }
         _ => {

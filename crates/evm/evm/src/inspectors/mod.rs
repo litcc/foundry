@@ -20,5 +20,8 @@ pub use logs::LogCollector;
 mod printer;
 pub use printer::TracePrinter;
 
+mod customizable;
 mod stack;
+pub use customizable::{Customizable, CustomizableInspector, DefaultInspector, EVMDataWrap};
+
 pub use stack::{InspectorData, InspectorStack, InspectorStackBuilder};

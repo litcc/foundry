@@ -39,7 +39,8 @@ exclude = ["benches/", "tests/", "test-data/", "testdata/"]
 # NOTE: Debuggers may provide less useful information with this setting.
 # Uncomment this section if you're using a debugger.
 [profile.dev]
-debug = 1
+#debug = 1
+debug = true
 
 # Speed up tests and dev build.
 [profile.dev.package]
@@ -126,14 +127,14 @@ foundry-macros = { path = "crates/macros" }
 foundry-test-utils = { path = "crates/test-utils" }
 
 # solc & compilation utilities
-foundry-block-explorers = { version = "0.2.0", default-features = false }
-foundry-compilers = { version = "0.2.4", default-features = false }
+foundry-block-explorers = { version = "=0.2.2", default-features = false }
+foundry-compilers = { version = "=0.2.4", default-features = false }
 
 ## revm
 # no default features to avoid c-kzg
 revm = { version = "3", default-features = false }
 revm-primitives = { version = "1", default-features = false }
-revm-inspectors = { version = "0.1", default-features = false }
+revm-inspectors = { git = "https://github.com/litcc/evm-inspectors.git",branch = "lock", default-features = false }
 
 ## ethers
 ethers = { version = "2.0", default-features = false }
@@ -146,22 +147,23 @@ ethers-middleware = { version = "2.0", default-features = false }
 ethers-solc = { version = "2.0", default-features = false }
 
 ## alloy
-alloy-consensus = { git = "https://github.com/alloy-rs/alloy" }
-alloy-eips = { git = "https://github.com/alloy-rs/alloy" }
-alloy-genesis = { git = "https://github.com/alloy-rs/alloy" }
-alloy-json-rpc = { git = "https://github.com/alloy-rs/alloy" }
-alloy-network = { git = "https://github.com/alloy-rs/alloy" }
-alloy-node-bindings = { git = "https://github.com/alloy-rs/alloy" }
-alloy-providers = { git = "https://github.com/alloy-rs/alloy" }
-alloy-pubsub = { git = "https://github.com/alloy-rs/alloy" }
-alloy-rpc-client = { git = "https://github.com/alloy-rs/alloy" }
-alloy-rpc-trace-types = { git = "https://github.com/alloy-rs/alloy" }
-alloy-rpc-types = { git = "https://github.com/alloy-rs/alloy" }
-alloy-signer = { git = "https://github.com/alloy-rs/alloy" }
-alloy-transport = { git = "https://github.com/alloy-rs/alloy" }
-alloy-transport-http = { git = "https://github.com/alloy-rs/alloy" }
-alloy-transport-ipc = { git = "https://github.com/alloy-rs/alloy" }
-alloy-transport-ws = { git = "https://github.com/alloy-rs/alloy" }
+alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-eips = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-genesis = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-json-rpc = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-network = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-node-bindings = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-providers = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-pubsub = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-rpc-client = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-rpc-trace-types = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-rpc-types = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-signer = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-transport = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-transport-http = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-transport-ipc = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+alloy-transport-ws = { git = "https://github.com/alloy-rs/alloy", rev="53ef6c2dc9867f03320131ff0f25577502259138" }
+
 alloy-primitives = "0.6.2"
 alloy-dyn-abi = "0.6.2"
 alloy-json-abi = "0.6.2"
@@ -224,4 +226,3 @@ revm-primitives = { git = "https://github.com/bluealloy/revm", branch = "reth_fr
 revm-interpreter = { git = "https://github.com/bluealloy/revm", branch = "reth_freeze" }
 revm-precompile = { git = "https://github.com/bluealloy/revm", branch = "reth_freeze" }
 
-revm-inspectors = { git = "https://github.com/paradigmxyz/evm-inspectors" }
