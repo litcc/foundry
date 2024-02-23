@@ -1,4 +1,3 @@
-use self::{build::BuildOutput, runner::ScriptRunner};
 use super::{build::BuildArgs, retry::RetryArgs};
 use alloy_dyn_abi::FunctionExt;
 use alloy_json_abi::{Function, InternalType, JsonAbi};
@@ -7,7 +6,6 @@ use alloy_rpc_types::request::TransactionRequest;
 use clap::{Parser, ValueHint};
 use dialoguer::Confirm;
 use ethers_providers::{Http, Middleware};
-use ethers_signers::LocalWallet;
 use eyre::{ContextCompat, Result, WrapErr};
 use forge::{
     backend::Backend,
@@ -19,10 +17,8 @@ use forge::{
         render_trace_arena, CallTraceDecoder, CallTraceDecoderBuilder, TraceKind, Traces,
     },
 };
-use foundry_cli::opts::MultiWallet;
 use foundry_common::{
     abi::{encode_function_args, get_func},
-    contracts::get_contract_name,
     errors::UnlinkedByteCode,
     evm::{Breakpoints, EvmArgs},
     fmt::{format_token, format_token_raw},
@@ -31,8 +27,7 @@ use foundry_common::{
 };
 use foundry_compilers::{
     artifacts::{ContractBytecodeSome, Libraries},
-    contracts::ArtifactContracts,
-    ArtifactId, Project,
+    ArtifactId,
 };
 use foundry_config::{
     figment,
@@ -44,13 +39,14 @@ use foundry_config::{
 };
 use foundry_evm::{
     constants::DEFAULT_CREATE2_DEPLOYER,
-    decode,
+    decode::RevertDecoder,
     inspectors::cheatcodes::{BroadcastableTransaction, BroadcastableTransactions},
 };
+use foundry_wallets::MultiWalletOpts;
 use futures::future;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use yansi::Paint;
 
 mod artifacts;
@@ -180,7 +176,7 @@ pub struct ScriptArgs {
     pub opts: BuildArgs,
 
     #[clap(flatten)]
-    pub wallets: MultiWallet,
+    pub wallets: MultiWalletOpts,
 
     #[clap(flatten)]
     pub evm_opts: EvmArgs,
@@ -349,7 +345,7 @@ impl ScriptArgs {
         if !result.success {
             return Err(eyre::eyre!(
                 "script failed: {}",
-                decode::decode_revert(&result.returned[..], None, None)
+                RevertDecoder::new().decode(&result.returned[..], None)
             ));
         }
 
@@ -363,6 +359,13 @@ impl ScriptArgs {
         let output = JsonResult { logs: console_logs, gas_used: result.gas_used, returns };
         let j = serde_json::to_string(&output)?;
         shell::println(j)?;
+
+        if !result.success {
+            return Err(eyre::eyre!(
+                "script failed: {}",
+                RevertDecoder::new().decode(&result.returned[..], None)
+            ));
+        }
 
         Ok(())
     }
@@ -415,7 +418,7 @@ impl ScriptArgs {
                 rpc: fork_url.clone(),
                 transaction: TransactionRequest {
                     from: Some(from),
-                    data: Some(bytes.clone()),
+                    input: Some(bytes.clone()).into(),
                     nonce: Some(U64::from(nonce + i as u64)),
                     ..Default::default()
                 },
@@ -510,8 +513,9 @@ impl ScriptArgs {
         for (data, to) in result.transactions.iter().flat_map(|txes| {
             txes.iter().filter_map(|tx| {
                 tx.transaction
-                    .data
+                    .input
                     .clone()
+                    .into_input()
                     .filter(|data| data.len() > max_size)
                     .map(|data| (data, tx.transaction.to))
             })
@@ -588,7 +592,6 @@ pub struct ScriptResult {
     pub transactions: Option<BroadcastableTransactions>,
     pub returned: Bytes,
     pub address: Option<Address>,
-    pub script_wallets: Vec<LocalWallet>,
     pub breakpoints: Breakpoints,
 }
 
@@ -697,27 +700,20 @@ For more information, please see https://eips.ethereum.org/EIPS/eip-3855",
 mod tests {
     use super::*;
     use foundry_cli::utils::LoadConfig;
-    use foundry_config::{NamedChain, UnresolvedEnvVarError};
+    use foundry_config::UnresolvedEnvVarError;
     use std::fs;
     use tempfile::tempdir;
 
     #[test]
     fn can_parse_sig() {
-        let args: ScriptArgs = ScriptArgs::parse_from([
-            "foundry-cli",
-            "Contract.sol",
-            "--sig",
-            "0x522bb704000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfFFb92266",
-        ]);
-        assert_eq!(
-            args.sig,
-            "522bb704000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfFFb92266"
-        );
+        let sig = "0x522bb704000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfFFb92266";
+        let args = ScriptArgs::parse_from(["foundry-cli", "Contract.sol", "--sig", sig]);
+        assert_eq!(args.sig, sig);
     }
 
     #[test]
     fn can_parse_unlocked() {
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "Contract.sol",
             "--sender",
@@ -741,7 +737,7 @@ mod tests {
 
     #[test]
     fn can_merge_script_config() {
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "Contract.sol",
             "--etherscan-api-key",
@@ -753,7 +749,7 @@ mod tests {
 
     #[test]
     fn can_parse_verifier_url() {
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "script",
             "script/Test.s.sol:TestScript",
@@ -775,7 +771,7 @@ mod tests {
 
     #[test]
     fn can_extract_code_size_limit() {
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "script",
             "script/Test.s.sol:TestScript",
@@ -803,7 +799,7 @@ mod tests {
 
         let toml_file = root.join(Config::FILE_NAME);
         fs::write(toml_file, config).unwrap();
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "Contract.sol",
             "--etherscan-api-key",
@@ -831,7 +827,7 @@ mod tests {
 
         let toml_file = root.join(Config::FILE_NAME);
         fs::write(toml_file, config).unwrap();
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "DeployV1",
             "--rpc-url",
@@ -870,7 +866,7 @@ mod tests {
 
         let toml_file = root.join(Config::FILE_NAME);
         fs::write(toml_file, config).unwrap();
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "DeployV1",
             "--rpc-url",
@@ -915,7 +911,7 @@ mod tests {
 
         let toml_file = root.join(Config::FILE_NAME);
         fs::write(toml_file, config).unwrap();
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "DeployV1",
             "--rpc-url",
@@ -943,7 +939,7 @@ mod tests {
     // <https://github.com/foundry-rs/foundry/issues/5923>
     #[test]
     fn test_5923() {
-        let args: ScriptArgs =
+        let args =
             ScriptArgs::parse_from(["foundry-cli", "DeployV1", "--priority-gas-price", "100"]);
         assert!(args.priority_gas_price.is_some());
     }
@@ -951,7 +947,7 @@ mod tests {
     // <https://github.com/foundry-rs/foundry/issues/5910>
     #[test]
     fn test_5910() {
-        let args: ScriptArgs = ScriptArgs::parse_from([
+        let args = ScriptArgs::parse_from([
             "foundry-cli",
             "--broadcast",
             "--with-gas-price",

@@ -149,7 +149,7 @@ impl CoverageArgs {
     }
 
     /// Builds the coverage report.
-    #[instrument(name = "prepare coverage", skip_all)]
+    #[instrument(name = "prepare", skip_all)]
     fn prepare(&self, config: &Config, output: ProjectCompileOutput) -> Result<CoverageReport> {
         let project_paths = config.project_paths();
 
@@ -303,14 +303,14 @@ impl CoverageArgs {
             .evm_spec(config.evm_spec_id())
             .sender(evm_opts.sender)
             .with_fork(evm_opts.get_fork(&config, env.clone()))
-            .with_cheats_config(CheatsConfig::new(&config, evm_opts.clone()))
+            .with_cheats_config(CheatsConfig::new(&config, evm_opts.clone(), None))
             .with_test_options(TestOptions {
                 fuzz: config.fuzz,
                 invariant: config.invariant,
                 ..Default::default()
             })
             .set_coverage(true)
-            .build(root.clone(), output, env, evm_opts)?;
+            .build(&root, output, env, evm_opts)?;
 
         // Run tests
         let known_contracts = runner.known_contracts.clone();

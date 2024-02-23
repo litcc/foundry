@@ -7,7 +7,7 @@ use crate::{
         prank::Prank,
         DealRecord, RecordAccess,
     },
-    script::Broadcast,
+    script::{Broadcast, ScriptWallets},
     test::expect::{
         self, ExpectedCallData, ExpectedCallTracker, ExpectedCallType, ExpectedEmit,
         ExpectedRevert, ExpectedRevertKind,
@@ -15,8 +15,7 @@ use crate::{
     CheatsConfig, CheatsCtxt, Error, Result, Vm,
 };
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
-use alloy_rpc_types::request::TransactionRequest;
-use alloy_signer::LocalWallet;
+use alloy_rpc_types::request::{TransactionInput, TransactionRequest};
 use alloy_sol_types::{SolInterface, SolValue};
 use foundry_common::{evm::Breakpoints, provider::alloy::RpcUrl};
 use foundry_evm_core::{
@@ -127,7 +126,7 @@ pub struct Cheatcodes {
     pub labels: HashMap<Address, String>,
 
     /// Remembered private keys
-    pub script_wallets: Vec<LocalWallet>,
+    pub script_wallets: Option<ScriptWallets>,
 
     /// Prank information
     pub prank: Option<Prank>,
@@ -218,7 +217,8 @@ impl Cheatcodes {
     #[inline]
     pub fn new(config: Arc<CheatsConfig>) -> Self {
         let labels = config.labels.clone();
-        Self { config, fs_commit: true, labels, ..Default::default() }
+        let script_wallets = config.script_wallets.clone();
+        Self { config, fs_commit: true, labels, script_wallets, ..Default::default() }
     }
 
     fn apply_cheatcode<DB: DatabaseExt>(
@@ -232,7 +232,7 @@ impl Cheatcodes {
 
         // ensure the caller is allowed to execute cheatcodes,
         // but only if the backend is in forking mode
-        data.db.ensure_cheatcode_access_forking_mode(caller)?;
+        data.db.ensure_cheatcode_access_forking_mode(&caller)?;
 
         apply_dispatch(&decoded, &mut CheatsCtxt { state: self, data, caller })
     }
@@ -255,7 +255,7 @@ impl Cheatcodes {
             .unwrap_or_default();
         let created_address = inputs.created_address(old_nonce);
 
-        if data.journaled_state.depth > 1 && !data.db.has_cheatcode_access(inputs.caller) {
+        if data.journaled_state.depth > 1 && !data.db.has_cheatcode_access(&inputs.caller) {
             // we only grant cheat code access for new contracts if the caller also has
             // cheatcode access and the new contract is created in top most call
             return created_address;
@@ -836,7 +836,7 @@ impl<DB: DatabaseExt> Inspector<DB> for Cheatcodes {
                             from: Some(broadcast.new_origin),
                             to: Some(call.contract),
                             value: Some(call.transfer.value),
-                            data: Some(call.input.clone()),
+                            input: TransactionInput::new(call.input.clone()),
                             nonce: Some(U64::from(account.info.nonce)),
                             gas: if is_fixed_gas_limit {
                                 Some(U256::from(call.gas_limit))
@@ -1202,18 +1202,12 @@ impl<DB: DatabaseExt> Inspector<DB> for Cheatcodes {
                 data.env.tx.caller = broadcast.new_origin;
 
                 if data.journaled_state.depth() == broadcast.depth {
-                    let (bytecode, to, nonce) = match process_create(
+                    let (bytecode, to, nonce) = process_broadcast_create(
                         broadcast.new_origin,
                         call.init_code.clone(),
                         data,
                         call,
-                    ) {
-                        Ok(val) => val,
-                        Err(err) => {
-                            return (InstructionResult::Revert, None, gas, Error::encode(err))
-                        }
-                    };
-
+                    );
                     let is_fixed_gas_limit = check_if_fixed_gas_limit(data, call.gas_limit);
 
                     self.broadcastable_transactions.push_back(BroadcastableTransaction {
@@ -1222,7 +1216,7 @@ impl<DB: DatabaseExt> Inspector<DB> for Cheatcodes {
                             from: Some(broadcast.new_origin),
                             to,
                             value: Some(call.value),
-                            data: Some(bytecode),
+                            input: TransactionInput::new(bytecode),
                             nonce: Some(U64::from(nonce)),
                             gas: if is_fixed_gas_limit {
                                 Some(U256::from(call.gas_limit))
@@ -1239,6 +1233,14 @@ impl<DB: DatabaseExt> Inspector<DB> for Cheatcodes {
                     debug!(target: "cheatcodes", tx=?self.broadcastable_transactions.back().unwrap(), "broadcastable {kind}");
                 }
             }
+        }
+
+        // Apply the Create2 deployer
+        if self.broadcast.is_some() || self.config.always_use_create_2_factory {
+            match apply_create2_deployer(data, call, self.prank.as_ref(), self.broadcast.as_ref()) {
+                Ok(_) => {}
+                Err(err) => return (InstructionResult::Revert, None, gas, Error::encode(err)),
+            };
         }
 
         // allow cheatcodes from the address of the new contract
@@ -1416,18 +1418,31 @@ fn mstore_revert_string(interpreter: &mut Interpreter<'_>, bytes: &[u8]) {
     interpreter.return_len = interpreter.shared_memory.len() - starting_offset
 }
 
-fn process_create<DB: DatabaseExt>(
-    broadcast_sender: Address,
-    bytecode: Bytes,
+/// Applies the default CREATE2 deployer for contract creation.
+///
+/// This function is invoked during the contract creation process and updates the caller of the
+/// contract creation transaction to be the `DEFAULT_CREATE2_DEPLOYER` if the `CreateScheme` is
+/// `Create2` and the current execution depth matches the depth at which the `prank` or `broadcast`
+/// was started, or the default depth of 1 if no prank or broadcast is currently active.
+///
+/// Returns a `DatabaseError::MissingCreate2Deployer` if the `DEFAULT_CREATE2_DEPLOYER` account is
+/// not found or if it does not have any associated bytecode.
+fn apply_create2_deployer<DB: DatabaseExt>(
     data: &mut EVMData<'_, DB>,
     call: &mut CreateInputs,
-) -> Result<(Bytes, Option<Address>, u64), DB::Error> {
-    match call.scheme {
-        CreateScheme::Create => {
-            call.caller = broadcast_sender;
-            Ok((bytecode, None, data.journaled_state.account(broadcast_sender).info.nonce))
+    prank: Option<&Prank>,
+    broadcast: Option<&Broadcast>,
+) -> Result<(), DB::Error> {
+    if let CreateScheme::Create2 { salt: _ } = call.scheme {
+        let mut base_depth = 1;
+        if let Some(prank) = &prank {
+            base_depth = prank.depth;
+        } else if let Some(broadcast) = &broadcast {
+            base_depth = broadcast.depth;
         }
-        CreateScheme::Create2 { salt } => {
+        // If the create scheme is Create2 and the depth equals the broadcast/prank/default
+        // depth, then use the default create2 factory as the deployer
+        if data.journaled_state.depth() == base_depth {
             // Sanity checks for our CREATE2 deployer
             let info =
                 &data.journaled_state.load_account(DEFAULT_CREATE2_DEPLOYER, data.db)?.0.info;
@@ -1440,7 +1455,32 @@ fn process_create<DB: DatabaseExt>(
             }
 
             call.caller = DEFAULT_CREATE2_DEPLOYER;
+        }
+    }
+    Ok(())
+}
 
+/// Processes the creation of a new contract when broadcasting, preparing the necessary data for the
+/// transaction to deploy the contract.
+///
+/// Returns the transaction calldata and the target address.
+///
+/// If the CreateScheme is Create, then this function returns the input bytecode without
+/// modification and no address since it will be filled in later. If the CreateScheme is Create2,
+/// then this function returns the calldata for the call to the create2 deployer which must be the
+/// salt and init code concatenated.
+fn process_broadcast_create<DB: DatabaseExt>(
+    broadcast_sender: Address,
+    bytecode: Bytes,
+    data: &mut EVMData<'_, DB>,
+    call: &mut CreateInputs,
+) -> (Bytes, Option<Address>, u64) {
+    match call.scheme {
+        CreateScheme::Create => {
+            call.caller = broadcast_sender;
+            (bytecode, None, data.journaled_state.account(broadcast_sender).info.nonce)
+        }
+        CreateScheme::Create2 { salt } => {
             // We have to increment the nonce of the user address, since this create2 will be done
             // by the create2_deployer
             let account = data.journaled_state.state().get_mut(&broadcast_sender).unwrap();
@@ -1450,7 +1490,7 @@ fn process_create<DB: DatabaseExt>(
 
             // Proxy deployer requires the data to be `salt ++ init_code`
             let calldata = [&salt.to_be_bytes::<32>()[..], &bytecode[..]].concat();
-            Ok((calldata.into(), Some(DEFAULT_CREATE2_DEPLOYER), prev))
+            (calldata.into(), Some(DEFAULT_CREATE2_DEPLOYER), prev)
         }
     }
 }

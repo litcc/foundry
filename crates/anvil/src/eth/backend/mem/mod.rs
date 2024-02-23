@@ -38,8 +38,8 @@ use alloy_rpc_trace_types::{
     parity::LocalizedTransactionTrace,
 };
 use alloy_rpc_types::{
-    state::StateOverride, AccessList, Block as AlloyBlock, BlockId,
-    BlockNumberOrTag as BlockNumber, CallRequest, EIP1186AccountProofResponse as AccountProof,
+    request::TransactionRequest, state::StateOverride, AccessList, Block as AlloyBlock, BlockId,
+    BlockNumberOrTag as BlockNumber, EIP1186AccountProofResponse as AccountProof,
     EIP1186StorageProof as StorageProof, Filter, FilteredParams, Header as AlloyHeader, Log,
     Transaction, TransactionReceipt,
 };
@@ -62,7 +62,7 @@ use foundry_common::types::ToAlloy;
 use foundry_evm::{
     backend::{DatabaseError, DatabaseResult, RevertSnapshotAction},
     constants::DEFAULT_CREATE2_DEPLOYER_RUNTIME_CODE,
-    decode::decode_revert,
+    decode::RevertDecoder,
     inspectors::AccessListTracer,
     revm::{
         self,
@@ -956,9 +956,8 @@ impl Backend {
                 }
                 node_info!("    Gas used: {}", receipt.gas_used());
                 if !info.exit.is_ok() {
-                    let r = decode_revert(
-                        info.out.clone().unwrap_or_default().as_ref(),
-                        None,
+                    let r = RevertDecoder::new().decode(
+                        info.out.as_ref().map(|b| &b[..]).unwrap_or_default(),
                         Some(info.exit),
                     );
                     node_info!("    Error: reverted with: {r}");
@@ -1015,14 +1014,14 @@ impl Backend {
         outcome
     }
 
-    /// Executes the [CallRequest] without writing to the DB
+    /// Executes the [TransactionRequest] without writing to the DB
     ///
     /// # Errors
     ///
     /// Returns an error if the `block_number` is greater than the current height
     pub async fn call(
         &self,
-        request: CallRequest,
+        request: TransactionRequest,
         fee_details: FeeDetails,
         block_request: Option<BlockRequest>,
         overrides: Option<StateOverride>,
@@ -1043,11 +1042,11 @@ impl Backend {
 
     fn build_call_env(
         &self,
-        request: CallRequest,
+        request: TransactionRequest,
         fee_details: FeeDetails,
         block_env: BlockEnv,
     ) -> Env {
-        let CallRequest { from, to, gas, value, input, nonce, access_list, .. } = request;
+        let TransactionRequest { from, to, gas, value, input, nonce, access_list, .. } = request;
 
         let FeeDetails { gas_price, max_fee_per_gas, max_priority_fee_per_gas } = fee_details;
 
@@ -1094,7 +1093,7 @@ impl Backend {
     pub fn call_with_state<D>(
         &self,
         state: D,
-        request: CallRequest,
+        request: TransactionRequest,
         fee_details: FeeDetails,
         block_env: BlockEnv,
     ) -> Result<(InstructionResult, Option<Output>, u64, State), BlockchainError>
@@ -1140,7 +1139,7 @@ impl Backend {
 
     pub async fn call_with_tracing(
         &self,
-        request: CallRequest,
+        request: TransactionRequest,
         fee_details: FeeDetails,
         block_request: Option<BlockRequest>,
         opts: GethDefaultTracingOptions,
@@ -1180,7 +1179,7 @@ impl Backend {
     pub fn build_access_list_with_state<D>(
         &self,
         state: D,
-        request: CallRequest,
+        request: TransactionRequest,
         fee_details: FeeDetails,
         block_env: BlockEnv,
     ) -> Result<(InstructionResult, Option<Output>, u64, AccessList), BlockchainError>
@@ -1567,7 +1566,6 @@ impl Backend {
         } = header;
 
         AlloyBlock {
-            total_difficulty: Some(self.total_difficulty()),
             header: AlloyHeader {
                 hash: Some(hash),
                 parent_hash,
@@ -1582,6 +1580,7 @@ impl Backend {
                 extra_data: extra_data.0.into(),
                 logs_bloom,
                 timestamp: U256::from(timestamp),
+                total_difficulty: Some(self.total_difficulty()),
                 difficulty,
                 mix_hash: Some(mix_hash),
                 nonce: Some(B64::from(nonce)),
@@ -1892,10 +1891,10 @@ impl Backend {
         }
 
         if let Some(fork) = self.get_fork() {
-            return fork
-                .debug_trace_transaction(hash, opts)
-                .await
-                .map_err(|_| BlockchainError::DataUnavailable)
+            return fork.debug_trace_transaction(hash, opts).await.map_err(|err| {
+                warn!(target: "backend", "error delegating debug_traceTransaction: {:?}", err);
+                BlockchainError::DataUnavailable
+            })
         }
 
         Ok(GethTrace::Default(Default::default()))
@@ -1921,7 +1920,10 @@ impl Backend {
 
         if let Some(fork) = self.get_fork() {
             if fork.predates_fork(number) {
-                return fork.trace_block(number).await.map_err(|_| BlockchainError::DataUnavailable)
+                return fork.trace_block(number).await.map_err(|err| {
+                    warn!(target: "backend", "error delegating trace_block: {:?}", err);
+                    BlockchainError::DataUnavailable
+                })
             }
         }
 
@@ -2070,7 +2072,7 @@ impl Backend {
         };
 
         inner.other.insert(
-            "deposit_nonce".to_string(),
+            "depositNonce".to_string(),
             serde_json::to_value(deposit_nonce).expect("Infallible"),
         );
 
