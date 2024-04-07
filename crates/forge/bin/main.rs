@@ -7,10 +7,14 @@ use eyre::Result;
 use foundry_cli::{handler, utils};
 
 mod cmd;
-mod opts;
-
 use cmd::{cache::CacheSubcommands, generate::GenerateSubcommands, watch};
+
+mod opts;
 use opts::{Forge, ForgeSubcommand};
+
+#[cfg(all(feature = "jemalloc", unix))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<()> {
     handler::install();
@@ -31,7 +35,7 @@ fn main() -> Result<()> {
         ForgeSubcommand::Script(cmd) => {
             // install the shell before executing the command
             foundry_common::shell::set_shell(foundry_common::shell::Shell::from_args(
-                cmd.opts.args.silent,
+                cmd.opts.silent,
                 cmd.json,
             ))?;
             utils::block_on(cmd.run_script())

@@ -203,6 +203,8 @@ interface Vm {
         bool reverted;
         /// An ordered list of storage accesses made during an account access operation.
         StorageAccess[] storageAccesses;
+        /// Call depth traversed during the recording of state differences
+        uint64 depth;
     }
 
     /// The storage accessed during an `AccountAccess`.
@@ -246,6 +248,22 @@ interface Vm {
     /// Signs `digest` with `privateKey` using the secp256k1 curve.
     #[cheatcode(group = Evm, safety = Safe)]
     function sign(uint256 privateKey, bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);
+
+    /// Signs `digest` with signer provided to script using the secp256k1 curve.
+    ///
+    /// If `--sender` is provided, the signer with provided address is used, otherwise,
+    /// if exactly one signer is provided to the script, that signer is used.
+    ///
+    /// Raises error if signer passed through `--sender` does not match any unlocked signers or
+    /// if `--sender` is not provided and not exactly one signer is passed to the script.
+    #[cheatcode(group = Evm, safety = Safe)]
+    function sign(bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);
+
+    /// Signs `digest` with signer provided to script using the secp256k1 curve.
+    ///
+    /// Raises error if none of the signers passed into the script have provided address.
+    #[cheatcode(group = Evm, safety = Safe)]
+    function sign(address signer, bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);
 
     /// Signs `digest` with `privateKey` using the secp256r1 curve.
     #[cheatcode(group = Evm, safety = Safe)]
@@ -1379,11 +1397,13 @@ interface Vm {
     #[cheatcode(group = Filesystem)]
     function writeLine(string calldata path, string calldata data) external;
 
-    /// Gets the creation bytecode from an artifact file. Takes in the relative path to the json file.
+    /// Gets the creation bytecode from an artifact file. Takes in the relative path to the json file or the path to the
+    /// artifact in the form of <path>:<contract>:<version> where <contract> and <version> parts are optional.
     #[cheatcode(group = Filesystem)]
     function getCode(string calldata artifactPath) external view returns (bytes memory creationBytecode);
 
-    /// Gets the deployed bytecode from an artifact file. Takes in the relative path to the json file.
+    /// Gets the deployed bytecode from an artifact file. Takes in the relative path to the json file or the path to the
+    /// artifact in the form of <path>:<contract>:<version> where <contract> and <version> parts are optional.
     #[cheatcode(group = Filesystem)]
     function getDeployedCode(string calldata artifactPath) external view returns (bytes memory runtimeBytecode);
 
@@ -1396,6 +1416,16 @@ interface Vm {
     /// Performs a foreign function call via terminal and returns the exit code, stdout, and stderr.
     #[cheatcode(group = Filesystem)]
     function tryFfi(string[] calldata commandInput) external returns (FfiResult memory result);
+
+    // -------- User Interaction --------
+
+    /// Prompts the user for a string value in the terminal.
+    #[cheatcode(group = Filesystem)]
+    function prompt(string calldata promptText) external returns (string memory input);
+
+    /// Prompts the user for a hidden string value in the terminal.
+    #[cheatcode(group = Filesystem)]
+    function promptSecret(string calldata promptText) external returns (string memory input);
 
     // ======== Environment Variables ========
 
@@ -1551,8 +1581,12 @@ interface Vm {
 
     // -------- Broadcasting Transactions --------
 
-    /// Using the address that calls the test contract, has the next call (at this call depth only)
-    /// create a transaction that can later be signed and sent onchain.
+    /// Has the next call (at this call depth only) create transactions that can later be signed and sent onchain.
+    ///
+    /// Broadcasting address is determined by checking the following in order:
+    /// 1. If `--sender` argument was provided, that address is used.
+    /// 2. If exactly one signer (e.g. private key, hw wallet, keystore) is set when `forge broadcast` is invoked, that signer is used.
+    /// 3. Otherwise, default foundry sender (1804c8AB1F12E6bbf3894d4083f33e07309d1f38) is used.
     #[cheatcode(group = Scripting)]
     function broadcast() external;
 
@@ -1566,8 +1600,12 @@ interface Vm {
     #[cheatcode(group = Scripting)]
     function broadcast(uint256 privateKey) external;
 
-    /// Using the address that calls the test contract, has all subsequent calls
-    /// (at this call depth only) create transactions that can later be signed and sent onchain.
+    /// Has all subsequent calls (at this call depth only) create transactions that can later be signed and sent onchain.
+    ///
+    /// Broadcasting address is determined by checking the following in order:
+    /// 1. If `--sender` argument was provided, that address is used.
+    /// 2. If exactly one signer (e.g. private key, hw wallet, keystore) is set when `forge broadcast` is invoked, that signer is used.
+    /// 3. Otherwise, default foundry sender (1804c8AB1F12E6bbf3894d4083f33e07309d1f38) is used.
     #[cheatcode(group = Scripting)]
     function startBroadcast() external;
 
@@ -1642,6 +1680,11 @@ interface Vm {
     /// Splits the given `string` into an array of strings divided by the `delimiter`.
     #[cheatcode(group = String)]
     function split(string calldata input, string calldata delimiter) external pure returns (string[] memory outputs);
+    /// Returns the index of the first occurrence of a `key` in an `input` string.
+    /// Returns `NOT_FOUND` (i.e. `type(uint256).max`) if the `key` is not found.
+    /// Returns 0 in case of an empty `key`.
+    #[cheatcode(group = String)]
+    function indexOf(string memory input, string memory key) external pure returns (uint256);
 
     // ======== JSON Parsing and Manipulation ========
 
@@ -1650,9 +1693,13 @@ interface Vm {
     // NOTE: Please read https://book.getfoundry.sh/cheatcodes/parse-json to understand the
     // limitations and caveats of the JSON parsing cheats.
 
+    /// Checks if `key` exists in a JSON object
+    /// `keyExists` is being deprecated in favor of `keyExistsJson`. It will be removed in future versions.
+    #[cheatcode(group = Json, status = Deprecated)]
+    function keyExists(string calldata json, string calldata key) external view returns (bool);
     /// Checks if `key` exists in a JSON object.
     #[cheatcode(group = Json)]
-    function keyExists(string calldata json, string calldata key) external view returns (bool);
+    function keyExistsJson(string calldata json, string calldata key) external view returns (bool);
 
     /// ABI-encodes a JSON object.
     #[cheatcode(group = Json)]
@@ -1813,6 +1860,98 @@ interface Vm {
     /// This is useful to replace a specific value of a JSON file, without having to parse the entire thing.
     #[cheatcode(group = Json)]
     function writeJson(string calldata json, string calldata path, string calldata valueKey) external;
+
+    // ======== TOML Parsing and Manipulation ========
+
+    // -------- Reading --------
+
+    // NOTE: Please read https://book.getfoundry.sh/cheatcodes/parse-toml to understand the
+    // limitations and caveats of the TOML parsing cheat.
+
+    /// Checks if `key` exists in a TOML table.
+    #[cheatcode(group = Toml)]
+    function keyExistsToml(string calldata toml, string calldata key) external view returns (bool);
+
+    /// ABI-encodes a TOML table.
+    #[cheatcode(group = Toml)]
+    function parseToml(string calldata toml) external pure returns (bytes memory abiEncodedData);
+
+    /// ABI-encodes a TOML table at `key`.
+    #[cheatcode(group = Toml)]
+    function parseToml(string calldata toml, string calldata key) external pure returns (bytes memory abiEncodedData);
+
+    // The following parseToml cheatcodes will do type coercion, for the type that they indicate.
+    // For example, parseTomlUint will coerce all values to a uint256. That includes stringified numbers '12.'
+    // and hex numbers '0xEF.'.
+    // Type coercion works ONLY for discrete values or arrays. That means that the key must return a value or array, not
+    // a TOML table.
+
+    /// Parses a string of TOML data at `key` and coerces it to `uint256`.
+    #[cheatcode(group = Toml)]
+    function parseTomlUint(string calldata toml, string calldata key) external pure returns (uint256);
+    /// Parses a string of TOML data at `key` and coerces it to `uint256[]`.
+    #[cheatcode(group = Toml)]
+    function parseTomlUintArray(string calldata toml, string calldata key) external pure returns (uint256[] memory);
+    /// Parses a string of TOML data at `key` and coerces it to `int256`.
+    #[cheatcode(group = Toml)]
+    function parseTomlInt(string calldata toml, string calldata key) external pure returns (int256);
+    /// Parses a string of TOML data at `key` and coerces it to `int256[]`.
+    #[cheatcode(group = Toml)]
+    function parseTomlIntArray(string calldata toml, string calldata key) external pure returns (int256[] memory);
+    /// Parses a string of TOML data at `key` and coerces it to `bool`.
+    #[cheatcode(group = Toml)]
+    function parseTomlBool(string calldata toml, string calldata key) external pure returns (bool);
+    /// Parses a string of TOML data at `key` and coerces it to `bool[]`.
+    #[cheatcode(group = Toml)]
+    function parseTomlBoolArray(string calldata toml, string calldata key) external pure returns (bool[] memory);
+    /// Parses a string of TOML data at `key` and coerces it to `address`.
+    #[cheatcode(group = Toml)]
+    function parseTomlAddress(string calldata toml, string calldata key) external pure returns (address);
+    /// Parses a string of TOML data at `key` and coerces it to `address[]`.
+    #[cheatcode(group = Toml)]
+    function parseTomlAddressArray(string calldata toml, string calldata key)
+        external
+        pure
+        returns (address[] memory);
+    /// Parses a string of TOML data at `key` and coerces it to `string`.
+    #[cheatcode(group = Toml)]
+    function parseTomlString(string calldata toml, string calldata key) external pure returns (string memory);
+    /// Parses a string of TOML data at `key` and coerces it to `string[]`.
+    #[cheatcode(group = Toml)]
+    function parseTomlStringArray(string calldata toml, string calldata key) external pure returns (string[] memory);
+    /// Parses a string of TOML data at `key` and coerces it to `bytes`.
+    #[cheatcode(group = Toml)]
+    function parseTomlBytes(string calldata toml, string calldata key) external pure returns (bytes memory);
+    /// Parses a string of TOML data at `key` and coerces it to `bytes[]`.
+    #[cheatcode(group = Toml)]
+    function parseTomlBytesArray(string calldata toml, string calldata key) external pure returns (bytes[] memory);
+    /// Parses a string of TOML data at `key` and coerces it to `bytes32`.
+    #[cheatcode(group = Toml)]
+    function parseTomlBytes32(string calldata toml, string calldata key) external pure returns (bytes32);
+    /// Parses a string of TOML data at `key` and coerces it to `bytes32[]`.
+    #[cheatcode(group = Toml)]
+    function parseTomlBytes32Array(string calldata toml, string calldata key)
+        external
+        pure
+        returns (bytes32[] memory);
+
+    /// Returns an array of all the keys in a TOML table.
+    #[cheatcode(group = Toml)]
+    function parseTomlKeys(string calldata toml, string calldata key) external pure returns (string[] memory keys);
+
+    // -------- Writing --------
+
+    // NOTE: Please read https://book.getfoundry.sh/cheatcodes/write-toml to understand how
+    // to use the TOML writing cheat.
+
+    /// Takes serialized JSON, converts to TOML and write a serialized TOML to a file.
+    #[cheatcode(group = Toml)]
+    function writeToml(string calldata json, string calldata path) external;
+
+    /// Takes serialized JSON, converts to TOML and write a serialized TOML table to an **existing** TOML file, replacing a value with key = <value_key.>
+    /// This is useful to replace a specific value of a TOML file, without having to parse the entire thing.
+    #[cheatcode(group = Toml)]
+    function writeToml(string calldata json, string calldata path, string calldata valueKey) external;
 
     // -------- Key Management --------
 

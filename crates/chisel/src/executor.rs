@@ -236,7 +236,7 @@ impl SessionSource {
 
         // the file compiled correctly, thus the last stack item must be the memory offset of
         // the `bytes memory inspectoor` value
-        let mut offset = stack.data().last().unwrap().to::<usize>();
+        let mut offset = stack.last().unwrap().to::<usize>();
         let mem_offset = &memory[offset..offset + 32];
         let len = U256::try_from_be_slice(mem_offset).unwrap().to::<usize>();
         offset += 32;
@@ -292,10 +292,8 @@ impl SessionSource {
         let backend = match self.config.backend.take() {
             Some(backend) => backend,
             None => {
-                let backend = Backend::spawn(
-                    self.config.evm_opts.get_fork(&self.config.foundry_config, env.clone()),
-                )
-                .await;
+                let fork = self.config.evm_opts.get_fork(&self.config.foundry_config, env.clone());
+                let backend = Backend::spawn(fork);
                 self.config.backend = Some(backend.clone());
                 backend
             }
@@ -308,6 +306,7 @@ impl SessionSource {
                     CheatsConfig::new(
                         &self.config.foundry_config,
                         self.config.evm_opts.clone(),
+                        None,
                         None,
                     )
                     .into(),
@@ -1783,9 +1782,6 @@ mod tests {
     }
 
     fn init_tracing() {
-        if std::env::var_os("RUST_LOG").is_none() {
-            std::env::set_var("RUST_LOG", "debug");
-        }
         let _ = tracing_subscriber::FmtSubscriber::builder()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .try_init();
