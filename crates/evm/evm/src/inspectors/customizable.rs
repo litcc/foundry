@@ -1,8 +1,9 @@
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, Log, U256};
 use foundry_evm_core::backend::DatabaseError;
 use revm::{
-    interpreter::{CallInputs, CreateInputs, Gas, InstructionResult, Interpreter},
-    Database, EVMData, Inspector,
+    interpreter::{CallInputs, CallOutcome, CreateInputs, CreateOutcome, Interpreter},
+    primitives::{EVMError, Env},
+    Database, EvmContext, Inspector,
 };
 use std::{
     any::Any,
@@ -10,7 +11,7 @@ use std::{
 };
 
 pub struct Customizable {
-    pub inspector: Box<dyn CustomizableInspector + Sync + 'static>,
+    pub inspector: Box<dyn CustomizableInspector>,
 }
 
 impl Clone for Customizable {
@@ -25,31 +26,38 @@ impl Debug for Customizable {
     }
 }
 
-pub struct EVMDataWrap<'a, 'b: 'a> {
-    pub env: &'a &'b mut revm::primitives::Env,
+pub struct InnerEvmContextWrap<'a, 'b> {
+    pub env: &'b mut Box<Env>,
     pub journaled_state: &'a mut revm::JournaledState,
     pub db: &'a mut (dyn Database<Error = DatabaseError> + 'b),
-    pub error: &'b mut Option<DatabaseError>,
-    pub precompiles: &'b mut revm::precompile::Precompiles,
+    pub error: &'b mut Result<(), EVMError<DatabaseError>>,
     #[cfg(feature = "optimism")]
     pub l1_block_info: &'b mut Option<crate::optimism::L1BlockInfo>,
 }
 
-pub trait CustomizableInspector: Any + Sync {
+// pub struct EvmContextWrap<'a, 'b: 'a> {
+//     /// Inner EVM context.
+//     pub inner: InnerEvmContextWrap<'a, 'b>,
+// }
+
+pub trait CustomizableInspector: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
-    fn clone_box(&self) -> Box<dyn CustomizableInspector + Sync>;
+    fn clone_box(&self) -> Box<dyn CustomizableInspector>;
 
     /// Called before the interpreter is initialized.
     ///
-    /// If `interp.instruction_result` is set to anything other than [InstructionResult::Continue]
-    /// then the execution of the interpreter is skipped.
+    /// If `interp.instruction_result` is set to anything other than
+    /// [crate::interpreter::InstructionResult::Continue] then the execution of the interpreter
+    /// is skipped.
     #[inline]
-    fn initialize_interp(&mut self, interp: &mut Interpreter<'_>, data: &mut EVMDataWrap<'_, '_>) {
-        let _ = interp;
-        let _ = data;
+    fn initialize_interp(
+        &mut self,
+        _interp: &mut Interpreter,
+        _context: InnerEvmContextWrap<'_, '_>,
+    ) {
     }
 
     /// Called on each step of the interpreter.
@@ -61,83 +69,49 @@ pub trait CustomizableInspector: Any + Sync {
     ///
     /// To get the current opcode, use `interp.current_opcode()`.
     #[inline]
-    fn step(&mut self, interp: &mut Interpreter<'_>, data: &mut EVMDataWrap<'_, '_>) {
-        let _ = interp;
-        let _ = data;
-    }
-
-    /// Called when a log is emitted.
-    #[inline]
-    fn log(
-        &mut self,
-        evm_data: &mut EVMDataWrap<'_, '_>,
-        address: &Address,
-        topics: &[B256],
-        data: &Bytes,
-    ) {
-        let _ = evm_data;
-        let _ = address;
-        let _ = topics;
-        let _ = data;
-    }
+    fn step(&mut self, _interp: &mut Interpreter, _context: InnerEvmContextWrap<'_, '_>) {}
 
     /// Called after `step` when the instruction has been executed.
     ///
-    /// Setting `interp.instruction_result` to anything other than [InstructionResult::Continue]
-    /// alters the execution of the interpreter.
+    /// Setting `interp.instruction_result` to anything other than
+    /// [crate::interpreter::InstructionResult::Continue] alters the execution
+    /// of the interpreter.
     #[inline]
-    fn step_end(&mut self, interp: &mut Interpreter<'_>, data: &mut EVMDataWrap<'_, '_>) {
-        let _ = interp;
-        let _ = data;
-    }
+    fn step_end(&mut self, _interp: &mut Interpreter, _context: InnerEvmContextWrap<'_, '_>) {}
+
+    /// Called when a log is emitted.
+    #[inline]
+    fn log(&mut self, _context: InnerEvmContextWrap<'_, '_>, _log: &Log) {}
 
     /// Called whenever a call to a contract is about to start.
     ///
-    /// InstructionResulting anything other than [InstructionResult::Continue] overrides the result
-    /// of the call.
+    /// InstructionResulting anything other than [crate::interpreter::InstructionResult::Continue]
+    /// overrides the result of the call.
     #[inline]
-    fn call(
-        &mut self,
-        data: &mut EVMDataWrap<'_, '_>,
-        inputs: &mut CallInputs,
-    ) -> (InstructionResult, Gas, Bytes) {
-        let _ = data;
-        let _ = inputs;
-        (InstructionResult::Continue, Gas::new(0), Bytes::new())
-    }
+    fn call(&mut self, _context: InnerEvmContextWrap<'_, '_>, _inputs: &mut CallInputs) {}
 
     /// Called when a call to a contract has concluded.
     ///
-    /// InstructionResulting anything other than the values passed to this function (`(ret,
-    /// remaining_gas, out)`) will alter the result of the call.
+    /// The returned [CallOutcome] is used as the result of the call.
+    ///
+    /// This allows the inspector to modify the given `result` before returning it.
     #[inline]
     fn call_end(
         &mut self,
-        data: &mut EVMDataWrap<'_, '_>,
-        inputs: &CallInputs,
-        remaining_gas: Gas,
-        ret: InstructionResult,
-        out: Bytes,
-    ) -> (InstructionResult, Gas, Bytes) {
-        let _ = data;
-        let _ = inputs;
-        (ret, remaining_gas, out)
+        _context: InnerEvmContextWrap<'_, '_>,
+        _inputs: &CallInputs,
+        _outcome: &CallOutcome,
+    ) {
     }
 
     /// Called when a contract is about to be created.
     ///
-    /// InstructionResulting anything other than [InstructionResult::Continue] overrides the result
-    /// of the creation.
+    /// If this returns `Some` then the [CreateOutcome] is used to override the result of the
+    /// creation.
+    ///
+    /// If this returns `None` then the creation proceeds as normal.
     #[inline]
-    fn create(
-        &mut self,
-        data: &mut EVMDataWrap<'_, '_>,
-        inputs: &mut CreateInputs,
-    ) -> (InstructionResult, Option<Address>, Gas, Bytes) {
-        let _ = data;
-        let _ = inputs;
-        (InstructionResult::Continue, None, Gas::new(0), Bytes::default())
-    }
+    fn create(&mut self, _context: InnerEvmContextWrap<'_, '_>, _inputs: &mut CreateInputs) {}
 
     /// Called when a contract has been created.
     ///
@@ -146,25 +120,15 @@ pub trait CustomizableInspector: Any + Sync {
     #[inline]
     fn create_end(
         &mut self,
-        data: &mut EVMDataWrap<'_, '_>,
-        inputs: &CreateInputs,
-        ret: InstructionResult,
-        address: Option<Address>,
-        remaining_gas: Gas,
-        out: Bytes,
-    ) -> (InstructionResult, Option<Address>, Gas, Bytes) {
-        let _ = data;
-        let _ = inputs;
-        (ret, address, remaining_gas, out)
+        _context: InnerEvmContextWrap<'_, '_>,
+        _inputs: &CreateInputs,
+        _outcome: &CreateOutcome,
+    ) {
     }
 
     /// Called when a contract has been self-destructed with funds transferred to target.
     #[inline]
-    fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        let _ = contract;
-        let _ = target;
-        let _ = value;
-    }
+    fn selfdestruct(&mut self, _contract: Address, _target: Address, _value: U256) {}
 }
 
 impl Customizable {
@@ -190,7 +154,7 @@ impl CustomizableInspector for DefaultInspector {
         self
     }
 
-    fn clone_box(&self) -> Box<dyn CustomizableInspector + Sync> {
+    fn clone_box(&self) -> Box<dyn CustomizableInspector> {
         Box::new(self.clone())
     }
 }
@@ -202,140 +166,128 @@ impl Default for Customizable {
 }
 
 impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
-    fn initialize_interp(&mut self, interp: &mut Interpreter<'_>, data: &mut EVMData<'_, DB>) {
-        let mut wrap = EVMDataWrap {
-            env: &mut data.env,
-            journaled_state: &mut data.journaled_state,
-            db: data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut data.error,
-            precompiles: &mut data.precompiles,
+    fn initialize_interp(&mut self, interp: &mut Interpreter, context: &mut EvmContext<DB>) {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.initialize_interp(interp, &mut wrap);
+
+        self.inspector.initialize_interp(interp, evm_context);
     }
 
-    fn step(&mut self, interp: &mut Interpreter<'_>, data: &mut EVMData<'_, DB>) {
-        let mut wrap = EVMDataWrap {
-            env: &mut data.env,
-            journaled_state: &mut data.journaled_state,
-            db: data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut data.error,
-            precompiles: &mut data.precompiles,
+    fn step(&mut self, interp: &mut Interpreter, context: &mut EvmContext<DB>) {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.step(interp, &mut wrap);
+        self.inspector.step(interp, evm_context)
     }
 
-    fn log(
-        &mut self,
-        evm_data: &mut EVMData<'_, DB>,
-        address: &Address,
-        topics: &[B256],
-        data: &Bytes,
-    ) {
-        let mut wrap = EVMDataWrap {
-            env: &mut evm_data.env,
-            journaled_state: &mut evm_data.journaled_state,
-            db: evm_data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut evm_data.error,
-            precompiles: &mut evm_data.precompiles,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut evm_data.l1_block_info,
-        };
-        self.inspector.log(&mut wrap, address, topics, data);
-    }
-
-    fn step_end(&mut self, interp: &mut Interpreter<'_>, data: &mut EVMData<'_, DB>) {
-        let mut wrap = EVMDataWrap {
-            env: &mut data.env,
-            journaled_state: &mut data.journaled_state,
-            db: data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut data.error,
-            precompiles: &mut data.precompiles,
+    fn step_end(&mut self, interp: &mut Interpreter, context: &mut EvmContext<DB>) {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.step_end(interp, &mut wrap);
+        self.inspector.step_end(interp, evm_context)
+    }
+
+    fn log(&mut self, context: &mut EvmContext<DB>, log: &Log) {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
+            #[cfg(feature = "optimism")]
+            l1_block_info: &mut data.l1_block_info,
+        };
+        self.inspector.log(evm_context, log)
     }
 
     fn call(
         &mut self,
-        data: &mut EVMData<'_, DB>,
+        context: &mut EvmContext<DB>,
         inputs: &mut CallInputs,
-    ) -> (InstructionResult, Gas, Bytes) {
-        let mut wrap = EVMDataWrap {
-            env: &mut data.env,
-            journaled_state: &mut data.journaled_state,
-            db: data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut data.error,
-            precompiles: &mut data.precompiles,
+    ) -> Option<CallOutcome> {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.call(&mut wrap, inputs)
+        self.inspector.call(evm_context, inputs);
+
+        None
     }
 
     fn call_end(
         &mut self,
-        data: &mut EVMData<'_, DB>,
+        context: &mut EvmContext<DB>,
         inputs: &CallInputs,
-        remaining_gas: Gas,
-        ret: InstructionResult,
-        out: Bytes,
-    ) -> (InstructionResult, Gas, Bytes) {
-        let mut wrap = EVMDataWrap {
-            env: &mut data.env,
-            journaled_state: &mut data.journaled_state,
-            db: data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut data.error,
-            precompiles: &mut data.precompiles,
+        outcome: CallOutcome,
+    ) -> CallOutcome {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.call_end(&mut wrap, inputs, remaining_gas, ret, out.clone())
+        self.inspector.call_end(evm_context, inputs, &outcome);
+        outcome
     }
 
     fn create(
         &mut self,
-        data: &mut EVMData<'_, DB>,
+        context: &mut EvmContext<DB>,
         inputs: &mut CreateInputs,
-    ) -> (InstructionResult, Option<Address>, Gas, Bytes) {
-        let mut wrap = EVMDataWrap {
-            env: &mut data.env,
-            journaled_state: &mut data.journaled_state,
-            db: data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut data.error,
-            precompiles: &mut data.precompiles,
+    ) -> Option<CreateOutcome> {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.create(&mut wrap, inputs)
+        self.inspector.create(evm_context, inputs);
+
+        None
     }
 
     fn create_end(
         &mut self,
-        data: &mut EVMData<'_, DB>,
+        context: &mut EvmContext<DB>,
         inputs: &CreateInputs,
-        ret: InstructionResult,
-        address: Option<Address>,
-        remaining_gas: Gas,
-        out: Bytes,
-    ) -> (InstructionResult, Option<Address>, Gas, Bytes) {
-        let mut wrap = EVMDataWrap {
-            env: &mut data.env,
-            journaled_state: &mut data.journaled_state,
-            db: data.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut data.error,
-            precompiles: &mut data.precompiles,
+        outcome: CreateOutcome,
+    ) -> CreateOutcome {
+        let evm_context = InnerEvmContextWrap {
+            env: &mut context.inner.env,
+            journaled_state: &mut context.inner.journaled_state,
+            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
+            error: &mut context.inner.error,
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.create_end(&mut wrap, inputs, ret, address, remaining_gas, out.clone())
+        self.inspector.create_end(evm_context, inputs, &outcome);
+        outcome
     }
 
     fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        self.inspector.selfdestruct(contract, target, value)
+        self.inspector.selfdestruct(contract, target, value);
     }
 }

@@ -2,6 +2,7 @@ use super::{
     Cheatcodes, CheatsConfig, ChiselState, CoverageCollector, Debugger, Fuzzer, LogCollector,
     StackSnapshotType, TracingInspector, TracingInspectorConfig,
 };
+use crate::inspectors::customizable::Customizable;
 use alloy_primitives::{Address, Bytes, Log, U256};
 use foundry_evm_core::{
     backend::{update_state, DatabaseExt},
@@ -239,6 +240,7 @@ pub struct InspectorData {
     pub debug: Option<DebugArena>,
     pub coverage: Option<HitMaps>,
     pub cheatcodes: Option<Cheatcodes>,
+    pub customizable: Option<Customizable>,
     pub chisel_state: Option<(Vec<U256>, Vec<u8>, InstructionResult)>,
 }
 
@@ -273,6 +275,7 @@ pub struct InspectorStack {
     pub fuzzer: Option<Fuzzer>,
     pub log_collector: Option<LogCollector>,
     pub tracer: Option<TracingInspector>,
+    pub customizable: Option<Customizable>,
     pub enable_isolation: bool,
 
     /// Flag marking if we are in the inner EVM context.
@@ -387,6 +390,7 @@ impl InspectorStack {
             debug: self.debugger.map(|debugger| debugger.arena),
             coverage: self.coverage.map(|coverage| coverage.maps),
             cheatcodes: self.cheatcodes,
+            customizable: self.customizable,
             chisel_state: self.chisel_state.and_then(|state| state.state),
         }
     }
@@ -399,7 +403,13 @@ impl InspectorStack {
     ) -> CallOutcome {
         let result = outcome.result.result;
         call_inspectors_adjust_depth!(
-            [&mut self.fuzzer, &mut self.debugger, &mut self.tracer, &mut self.cheatcodes],
+            [
+                &mut self.fuzzer,
+                &mut self.debugger,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.customizable
+            ],
             |inspector| {
                 let new_outcome = inspector.call_end(ecx, inputs, outcome.clone());
 
@@ -577,7 +587,7 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
     fn initialize_interp(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<&mut DB>) {
         call_inspectors_adjust_depth!(
             #[no_ret]
-            [&mut self.coverage, &mut self.tracer, &mut self.cheatcodes],
+            [&mut self.coverage, &mut self.tracer, &mut self.cheatcodes, &mut self.customizable],
             |inspector| inspector.initialize_interp(interpreter, ecx),
             self,
             ecx
@@ -593,6 +603,7 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
                 &mut self.tracer,
                 &mut self.coverage,
                 &mut self.cheatcodes,
+                &mut self.customizable
             ],
             |inspector| inspector.step(interpreter, ecx),
             self,
@@ -603,7 +614,12 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
     fn step_end(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<&mut DB>) {
         call_inspectors_adjust_depth!(
             #[no_ret]
-            [&mut self.tracer, &mut self.cheatcodes, &mut self.chisel_state],
+            [
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.chisel_state,
+                &mut self.customizable
+            ],
             |inspector| inspector.step_end(interpreter, ecx),
             self,
             ecx
@@ -613,7 +629,12 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
     fn log(&mut self, ecx: &mut EvmContext<&mut DB>, log: &Log) {
         call_inspectors_adjust_depth!(
             #[no_ret]
-            [&mut self.tracer, &mut self.log_collector, &mut self.cheatcodes],
+            [
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.cheatcodes,
+                &mut self.customizable
+            ],
             |inspector| inspector.log(ecx, log),
             self,
             ecx
@@ -637,6 +658,7 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
                 &mut self.tracer,
                 &mut self.log_collector,
                 &mut self.cheatcodes,
+                &mut self.customizable
             ],
             |inspector| {
                 let mut out = None;
@@ -706,7 +728,13 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
         }
 
         call_inspectors_adjust_depth!(
-            [&mut self.debugger, &mut self.tracer, &mut self.coverage, &mut self.cheatcodes],
+            [
+                &mut self.debugger,
+                &mut self.tracer,
+                &mut self.coverage,
+                &mut self.cheatcodes,
+                &mut self.customizable
+            ],
             |inspector| inspector.create(ecx, create).map(Some),
             self,
             ecx
@@ -742,7 +770,7 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
         let result = outcome.result.result;
 
         call_inspectors_adjust_depth!(
-            [&mut self.debugger, &mut self.tracer, &mut self.cheatcodes],
+            [&mut self.debugger, &mut self.tracer, &mut self.cheatcodes, &mut self.customizable],
             |inspector| {
                 let new_outcome = inspector.create_end(ecx, call, outcome.clone());
 
@@ -761,8 +789,8 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
     }
 
     fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        call_inspectors!([&mut self.tracer], |inspector| Inspector::<DB>::selfdestruct(
-            inspector, contract, target, value
-        ));
+        call_inspectors!([&mut self.tracer, &mut self.customizable], |inspector| {
+            Inspector::<DB>::selfdestruct(inspector, contract, target, value)
+        });
     }
 }

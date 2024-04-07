@@ -16,5 +16,7 @@ pub use debugger::Debugger;
 mod logs;
 pub use logs::LogCollector;
 
+pub mod customizable;
 mod stack;
+
 pub use stack::{InspectorData, InspectorStack, InspectorStackBuilder};

@@ -7,7 +7,7 @@
 // the concrete `Executor` type.
 
 use crate::inspectors::{
-    cheatcodes::BroadcastableTransactions, Cheatcodes, Customizable, InspectorData, InspectorStack,
+    cheatcodes::BroadcastableTransactions, Cheatcodes, InspectorData, InspectorStack,
 };
 use alloy_dyn_abi::{DynSolValue, FunctionExt, JsonAbiExt};
 use alloy_json_abi::Function;
@@ -45,6 +45,7 @@ pub mod invariant;
 pub use invariant::InvariantExecutor;
 
 mod tracing;
+use crate::inspectors::customizable::Customizable;
 pub use tracing::TracingExecutor;
 
 sol! {
@@ -676,6 +677,8 @@ pub struct RawCallResult {
     pub out: Option<Output>,
     /// The chisel state
     pub chisel_state: Option<(Vec<U256>, Vec<u8>, InstructionResult)>,
+    /// customizable
+    pub customizable: Option<Customizable>,
 }
 
 impl Default for RawCallResult {
@@ -699,6 +702,7 @@ impl Default for RawCallResult {
             cheatcodes: Default::default(),
             out: None,
             chisel_state: None,
+            customizable: None,
         }
     }
 }
@@ -805,8 +809,16 @@ fn convert_executed_result(
         _ => Bytes::new(),
     };
 
-    let InspectorData { logs, labels, traces, coverage, debug, cheatcodes, chisel_state } =
-        inspector.collect();
+    let InspectorData {
+        logs,
+        labels,
+        traces,
+        coverage,
+        debug,
+        cheatcodes,
+        chisel_state,
+        customizable,
+    } = inspector.collect();
 
     let transactions = match cheatcodes.as_ref() {
         Some(cheats) if !cheats.broadcastable_transactions.is_empty() => {
@@ -834,5 +846,6 @@ fn convert_executed_result(
         cheatcodes,
         out,
         chisel_state,
+        customizable,
     })
 }
