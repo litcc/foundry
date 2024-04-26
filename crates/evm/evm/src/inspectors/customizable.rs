@@ -43,6 +43,8 @@ pub struct InnerEvmContextWrap<'a, 'b> {
 pub trait CustomizableInspector: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
+
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
     fn clone_box(&self) -> Box<dyn CustomizableInspector>;
@@ -140,6 +142,14 @@ impl Customizable {
         let df = self.inspector.as_any().downcast_ref::<T>();
         df
     }
+
+    pub fn take_inspector<T: CustomizableInspector + Sync + 'static>(self) -> Option<T> {
+        let inspector = self.inspector.into_box_any().downcast::<T>();
+        match inspector {
+            Ok(d) => Some(*d),
+            Err(e) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -147,6 +157,10 @@ pub struct DefaultInspector {}
 
 impl CustomizableInspector for DefaultInspector {
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 
