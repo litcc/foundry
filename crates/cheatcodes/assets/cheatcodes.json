@@ -83,6 +83,48 @@
           "description": "The account's code was copied."
         }
       ]
+    },
+    {
+      "name": "ForgeContext",
+      "description": "Forge execution contexts.",
+      "variants": [
+        {
+          "name": "TestGroup",
+          "description": "Test group execution context (test, coverage or snapshot)."
+        },
+        {
+          "name": "Test",
+          "description": "`forge test` execution context."
+        },
+        {
+          "name": "Coverage",
+          "description": "`forge coverage` execution context."
+        },
+        {
+          "name": "Snapshot",
+          "description": "`forge snapshot` execution context."
+        },
+        {
+          "name": "ScriptGroup",
+          "description": "Script group execution context (dry run, broadcast or resume)."
+        },
+        {
+          "name": "ScriptDryRun",
+          "description": "`forge script` execution context."
+        },
+        {
+          "name": "ScriptBroadcast",
+          "description": "`forge script --broadcast` execution context."
+        },
+        {
+          "name": "ScriptResume",
+          "description": "`forge script --resume` execution context."
+        },
+        {
+          "name": "Unknown",
+          "description": "Unknown `forge` execution context."
+        }
+      ]
     }
   ],
   "structs": [
@@ -413,6 +455,37 @@
           "name": "reverted",
           "ty": "bool",
           "description": "If the access was reverted."
+        }
+      ]
+    },
+    {
+      "name": "Gas",
+      "description": "Gas used. Returned by `lastCallGas`.",
+      "fields": [
+        {
+          "name": "gasLimit",
+          "ty": "uint64",
+          "description": "The gas limit of the call."
+        },
+        {
+          "name": "gasTotalUsed",
+          "ty": "uint64",
+          "description": "The total gas used."
+        },
+        {
+          "name": "gasMemoryUsed",
+          "ty": "uint64",
+          "description": "The amount of gas used for memory expansion."
+        },
+        {
+          "name": "gasRefunded",
+          "ty": "int64",
+          "description": "The amount of gas refunded."
+        },
+        {
+          "name": "gasRemaining",
+          "ty": "uint64",
+          "description": "The amount of gas remaining."
         }
       ]
     }
@@ -2900,6 +2973,46 @@
     },
     {
       "func": {
+        "id": "blobBaseFee",
+        "description": "Sets `block.blobbasefee`",
+        "declaration": "function blobBaseFee(uint256 newBlobBaseFee) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "blobBaseFee(uint256)",
+        "selector": "0x6d315d7e",
+        "selectorBytes": [
+          109,
+          49,
+          93,
+          126
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
+        "id": "blobhashes",
+        "description": "Sets the blobhashes in the transaction.\nNot available on EVM versions before Cancun.\nIf used on unsupported EVM versions it will revert.",
+        "declaration": "function blobhashes(bytes32[] calldata blobhashes) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "blobhashes(bytes32[])",
+        "selector": "0x129de7eb",
+        "selectorBytes": [
+          18,
+          157,
+          231,
+          235
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
         "id": "breakpoint_0",
         "description": "Writes a breakpoint to jump to in the debugger.",
         "declaration": "function breakpoint(string calldata char) external;",
@@ -3712,6 +3825,26 @@
           194,
           101,
           27
+        ]
+      },
+      "group": "environment",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "envExists",
+        "description": "Gets the environment variable `name` and returns true if it exists, else returns false.",
+        "declaration": "function envExists(string calldata name) external view returns (bool result);",
+        "visibility": "external",
+        "mutability": "view",
+        "signature": "envExists(string)",
+        "selector": "0xce8365f9",
+        "selectorBytes": [
+          206,
+          131,
+          101,
+          249
         ]
       },
       "group": "environment",
@@ -4580,6 +4713,46 @@
     },
     {
       "func": {
+        "id": "getBlobBaseFee",
+        "description": "Gets the current `block.blobbasefee`.\nYou should use this instead of `block.blobbasefee` if you use `vm.blobBaseFee`, as `block.blobbasefee` is assumed to be constant across a transaction,\nand as a result will get optimized out by the compiler.\nSee https://github.com/foundry-rs/foundry/issues/6180",
+        "declaration": "function getBlobBaseFee() external view returns (uint256 blobBaseFee);",
+        "visibility": "external",
+        "mutability": "view",
+        "signature": "getBlobBaseFee()",
+        "selector": "0x1f6d6ef7",
+        "selectorBytes": [
+          31,
+          109,
+          110,
+          247
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "getBlobhashes",
+        "description": "Gets the blockhashes from the current transaction.\nNot available on EVM versions before Cancun.\nIf used on unsupported EVM versions it will revert.",
+        "declaration": "function getBlobhashes() external view returns (bytes32[] memory blobhashes);",
+        "visibility": "external",
+        "mutability": "view",
+        "signature": "getBlobhashes()",
+        "selector": "0xf56ff18b",
+        "selectorBytes": [
+          245,
+          111,
+          241,
+          139
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
         "id": "getBlockNumber",
         "description": "Gets the current `block.number`.\nYou should use this instead of `block.number` if you use `vm.roll`, as `block.number` is assumed to be constant across a transaction,\nand as a result will get optimized out by the compiler.\nSee https://github.com/foundry-rs/foundry/issues/6180",
         "declaration": "function getBlockNumber() external view returns (uint256 height);",
@@ -4802,7 +4975,7 @@
       "func": {
         "id": "indexOf",
         "description": "Returns the index of the first occurrence of a `key` in an `input` string.\nReturns `NOT_FOUND` (i.e. `type(uint256).max`) if the `key` is not found.\nReturns 0 in case of an empty `key`.",
-        "declaration": "function indexOf(string memory input, string memory key) external pure returns (uint256);",
+        "declaration": "function indexOf(string calldata input, string calldata key) external pure returns (uint256);",
         "visibility": "external",
         "mutability": "pure",
         "signature": "indexOf(string,string)",
@@ -4815,6 +4988,26 @@
         ]
       },
       "group": "string",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "isContext",
+        "description": "Returns true if `forge` command was executed in given context.",
+        "declaration": "function isContext(ForgeContext context) external view returns (bool result);",
+        "visibility": "external",
+        "mutability": "view",
+        "signature": "isContext(uint8)",
+        "selector": "0x64af255d",
+        "selectorBytes": [
+          100,
+          175,
+          37,
+          93
+        ]
+      },
+      "group": "environment",
       "status": "stable",
       "safety": "safe"
     },
@@ -4955,6 +5148,26 @@
         ]
       },
       "group": "utilities",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "lastCallGas",
+        "description": "Gets the gas used in the last call.",
+        "declaration": "function lastCallGas() external view returns (Gas memory gas);",
+        "visibility": "external",
+        "mutability": "view",
+        "signature": "lastCallGas()",
+        "selector": "0x2b589b28",
+        "selectorBytes": [
+          43,
+          88,
+          155,
+          40
+        ]
+      },
+      "group": "evm",
       "status": "stable",
       "safety": "safe"
     },
@@ -6020,7 +6233,7 @@
     },
     {
       "func": {
-        "id": "prevrandao",
+        "id": "prevrandao_0",
         "description": "Sets `block.prevrandao`.\nNot available on EVM versions before Paris. Use `difficulty` instead.\nIf used on unsupported EVM versions it will revert.",
         "declaration": "function prevrandao(bytes32 newPrevrandao) external;",
         "visibility": "external",
@@ -6032,6 +6245,26 @@
           146,
           85,
           73
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
+        "id": "prevrandao_1",
+        "description": "Sets `block.prevrandao`.\nNot available on EVM versions before Paris. Use `difficulty` instead.\nIf used on unsupported EVM versions it will revert.",
+        "declaration": "function prevrandao(uint256 newPrevrandao) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "prevrandao(uint256)",
+        "selector": "0x9cb1c0d4",
+        "selectorBytes": [
+          156,
+          177,
+          192,
+          212
         ]
       },
       "group": "evm",
@@ -6080,6 +6313,26 @@
     },
     {
       "func": {
+        "id": "promptAddress",
+        "description": "Prompts the user for an address in the terminal.",
+        "declaration": "function promptAddress(string calldata promptText) external returns (address);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "promptAddress(string)",
+        "selector": "0x62ee05f4",
+        "selectorBytes": [
+          98,
+          238,
+          5,
+          244
+        ]
+      },
+      "group": "filesystem",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
         "id": "promptSecret",
         "description": "Prompts the user for a hidden string value in the terminal.",
         "declaration": "function promptSecret(string calldata promptText) external returns (string memory input);",
@@ -6092,6 +6345,26 @@
           39,
           157,
           65
+        ]
+      },
+      "group": "filesystem",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "promptUint",
+        "description": "Prompts the user for uint256 in the terminal.",
+        "declaration": "function promptUint(string calldata promptText) external returns (uint256);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "promptUint(string)",
+        "selector": "0x652fd489",
+        "selectorBytes": [
+          101,
+          47,
+          212,
+          137
         ]
       },
       "group": "filesystem",
@@ -6952,6 +7225,26 @@
           28,
           214,
           243
+        ]
+      },
+      "group": "json",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "serializeUintToHex",
+        "description": "See `serializeJson`.",
+        "declaration": "function serializeUintToHex(string calldata objectKey, string calldata valueKey, uint256 value) external returns (string memory json);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "serializeUintToHex(string,string,uint256)",
+        "selector": "0xae5a2ae8",
+        "selectorBytes": [
+          174,
+          90,
+          42,
+          232
         ]
       },
       "group": "json",

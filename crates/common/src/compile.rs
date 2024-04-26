@@ -1,17 +1,18 @@
 //! Support for compiling [foundry_compilers::Project]
 
 use crate::{compact_to_contract, glob::GlobMatcher, term::SpinnerReporter, TestFunctionExt};
-use comfy_table::{presets::ASCII_MARKDOWN, Attribute, Cell, Color, Table};
+use comfy_table::{presets::ASCII_MARKDOWN, Attribute, Cell, CellAlignment, Color, Table};
 use eyre::{Context, Result};
 use foundry_block_explorers::contract::Metadata;
 use foundry_compilers::{
     artifacts::{BytecodeObject, ContractBytecodeSome, Libraries},
     remappings::Remapping,
     report::{BasicStdoutReporter, NoReporter, Report},
-    Artifact, ArtifactId, FileFilter, Graph, Project, ProjectCompileOutput, ProjectPathsConfig,
-    Solc, SolcConfig,
+    Artifact, ArtifactId, FileFilter, Project, ProjectCompileOutput, ProjectPathsConfig, Solc,
+    SolcConfig,
 };
 use foundry_linking::Linker;
+use num_format::{Locale, ToFormattedString};
 use rustc_hash::FxHashMap;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -403,8 +404,8 @@ impl Display for SizeReport {
         table.load_preset(ASCII_MARKDOWN);
         table.set_header([
             Cell::new("Contract").add_attribute(Attribute::Bold).fg(Color::Blue),
-            Cell::new("Size (kB)").add_attribute(Attribute::Bold).fg(Color::Blue),
-            Cell::new("Margin (kB)").add_attribute(Attribute::Bold).fg(Color::Blue),
+            Cell::new("Size (B)").add_attribute(Attribute::Bold).fg(Color::Blue),
+            Cell::new("Margin (B)").add_attribute(Attribute::Bold).fg(Color::Blue),
         ]);
 
         // filters out non dev contracts (Test or Script)
@@ -417,10 +418,15 @@ impl Display for SizeReport {
                 _ => Color::Red,
             };
 
+            let locale = &Locale::en;
             table.add_row([
                 Cell::new(name).fg(color),
-                Cell::new(contract.size as f64 / 1000.0).fg(color),
-                Cell::new(margin as f64 / 1000.0).fg(color),
+                Cell::new(contract.size.to_formatted_string(locale))
+                    .set_alignment(CellAlignment::Right)
+                    .fg(color),
+                Cell::new(margin.to_formatted_string(locale))
+                    .set_alignment(CellAlignment::Right)
+                    .fg(color),
             ]);
         }
 
@@ -464,27 +470,12 @@ pub struct ContractInfo {
 /// If `verify` and it's a standalone script, throw error. Only allowed for projects.
 ///
 /// **Note:** this expects the `target_path` to be absolute
-pub fn compile_target_with_filter(
+pub fn compile_target(
     target_path: &Path,
     project: &Project,
     quiet: bool,
-    verify: bool,
-    skip: Vec<SkipBuildFilter>,
 ) -> Result<ProjectCompileOutput> {
-    let graph = Graph::resolve(&project.paths)?;
-
-    // Checking if it's a standalone script, or part of a project.
-    let mut compiler = ProjectCompiler::new().quiet(quiet);
-    if !skip.is_empty() {
-        compiler = compiler.filter(Box::new(SkipBuildFilters::new(skip)?));
-    }
-    if !graph.files().contains_key(target_path) {
-        if verify {
-            eyre::bail!("You can only verify deployments from inside a project! Make sure it exists with `forge tree`.");
-        }
-        compiler = compiler.files([target_path.into()]);
-    }
-    compiler.compile(project)
+    ProjectCompiler::new().quiet(quiet).files([target_path.into()]).compile(project)
 }
 
 /// Compiles an Etherscan source from metadata by creating a project.
@@ -569,19 +560,35 @@ pub fn etherscan_project(metadata: &Metadata, target_path: impl AsRef<Path>) -> 
 
 /// Bundles multiple `SkipBuildFilter` into a single `FileFilter`
 #[derive(Clone, Debug)]
-pub struct SkipBuildFilters(Vec<GlobMatcher>);
+pub struct SkipBuildFilters {
+    /// All provided filters.
+    pub matchers: Vec<GlobMatcher>,
+    /// Root of the project.
+    pub project_root: PathBuf,
+}
 
 impl FileFilter for SkipBuildFilters {
     /// Only returns a match if _no_  exclusion filter matches
     fn is_match(&self, file: &Path) -> bool {
-        self.0.iter().all(|matcher| is_match_exclude(matcher, file))
+        self.matchers.iter().all(|matcher| {
+            if !is_match_exclude(matcher, file) {
+                false
+            } else {
+                file.strip_prefix(&self.project_root)
+                    .map_or(true, |stripped| is_match_exclude(matcher, stripped))
+            }
+        })
     }
 }
 
 impl SkipBuildFilters {
     /// Creates a new `SkipBuildFilters` from multiple `SkipBuildFilter`.
-    pub fn new(matchers: impl IntoIterator<Item = SkipBuildFilter>) -> Result<Self> {
-        matchers.into_iter().map(|m| m.compile()).collect::<Result<_>>().map(Self)
+    pub fn new(
+        filters: impl IntoIterator<Item = SkipBuildFilter>,
+        project_root: PathBuf,
+    ) -> Result<Self> {
+        let matchers = filters.into_iter().map(|m| m.compile()).collect::<Result<_>>();
+        matchers.map(|filters| Self { matchers: filters, project_root })
     }
 }
 

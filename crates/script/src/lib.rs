@@ -6,26 +6,23 @@ extern crate tracing;
 use self::transaction::AdditionalContract;
 use crate::runner::ScriptRunner;
 use alloy_json_abi::{Function, JsonAbi};
-use alloy_primitives::{Address, Bytes, Log, U256};
+use alloy_primitives::{Address, Bytes, Log, TxKind, U256};
+use alloy_signer::Signer;
 use broadcast::next_nonce;
 use build::PreprocessedState;
 use clap::{Parser, ValueHint};
 use dialoguer::Confirm;
-use ethers_signers::Signer;
 use eyre::{ContextCompat, Result};
 use forge_verify::RetryArgs;
 use foundry_cli::{opts::CoreBuildArgs, utils::LoadConfig};
 use foundry_common::{
     abi::{encode_function_args, get_func},
     compile::SkipBuildFilter,
-    errors::UnlinkedByteCode,
     evm::{Breakpoints, EvmArgs},
-    provider::ethers::RpcUrl,
-    shell,
-    types::ToAlloy,
-    CONTRACT_MAX_SIZE, SELECTOR_LEN,
+    provider::alloy::RpcUrl,
+    shell, ContractsByArtifact, CONTRACT_MAX_SIZE, SELECTOR_LEN,
 };
-use foundry_compilers::{artifacts::ContractBytecodeSome, ArtifactId};
+use foundry_compilers::ArtifactId;
 use foundry_config::{
     figment,
     figment::{
@@ -48,10 +45,9 @@ use foundry_evm::{
 };
 use foundry_wallets::MultiWalletOpts;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::{collections::HashMap, sync::Arc};
 use yansi::Paint;
 
-mod artifacts;
 mod broadcast;
 mod build;
 mod execute;
@@ -107,6 +103,12 @@ pub struct ScriptArgs {
     #[arg(long)]
     pub broadcast: bool,
 
+    /// Batch size of transactions.
+    ///
+    /// This is ignored and set to 1 if batching is not available or `--slow` is enabled.
+    #[arg(long, default_value = "100")]
+    pub batch_size: usize,
+
     /// Skips on-chain simulation.
     #[arg(long)]
     pub skip_simulation: bool,
@@ -118,7 +120,6 @@ pub struct ScriptArgs {
     /// Send via `eth_sendTransaction` using the `--from` argument or `$ETH_FROM` as sender
     #[arg(
         long,
-        requires = "sender",
         conflicts_with_all = &["private_key", "private_keys", "froms", "ledger", "trezor", "aws"],
     )]
     pub unlocked: bool,
@@ -265,7 +266,7 @@ impl ScriptArgs {
 
             pre_simulation.args.check_contract_sizes(
                 &pre_simulation.execution_result,
-                &pre_simulation.build_data.highlevel_known_contracts,
+                &pre_simulation.build_data.known_contracts,
             )?;
 
             pre_simulation.fill_metadata().await?.bundle().await?
@@ -299,7 +300,7 @@ impl ScriptArgs {
             .wallets
             .private_keys()?
             .filter(|pks| pks.len() == 1)
-            .map(|pks| pks.first().unwrap().address().to_alloy());
+            .map(|pks| pks.first().unwrap().address());
         Ok(maybe_sender)
     }
 
@@ -353,25 +354,16 @@ impl ScriptArgs {
     fn check_contract_sizes(
         &self,
         result: &ScriptResult,
-        known_contracts: &BTreeMap<ArtifactId, ContractBytecodeSome>,
+        known_contracts: &ContractsByArtifact,
     ) -> Result<()> {
         // (name, &init, &deployed)[]
         let mut bytecodes: Vec<(String, &[u8], &[u8])> = vec![];
 
         // From artifacts
-        for (artifact, bytecode) in known_contracts.iter() {
-            if bytecode.bytecode.object.is_unlinked() {
-                return Err(UnlinkedByteCode::Bytecode(artifact.identifier()).into());
-            }
-            let init_code = bytecode.bytecode.object.as_bytes().unwrap();
-            // Ignore abstract contracts
-            if let Some(ref deployed_code) = bytecode.deployed_bytecode.bytecode {
-                if deployed_code.object.is_unlinked() {
-                    return Err(UnlinkedByteCode::DeployedBytecode(artifact.identifier()).into());
-                }
-                let deployed_code = deployed_code.object.as_bytes().unwrap();
-                bytecodes.push((artifact.name.clone(), init_code, deployed_code));
-            }
+        for (artifact, contract) in known_contracts.iter() {
+            let Some(bytecode) = &contract.bytecode else { continue };
+            let Some(deployed_bytecode) = &contract.deployed_bytecode else { continue };
+            bytecodes.push((artifact.name.clone(), bytecode, deployed_bytecode));
         }
 
         // From traces
@@ -408,13 +400,15 @@ impl ScriptArgs {
             let mut offset = 0;
 
             // Find if it's a CREATE or CREATE2. Otherwise, skip transaction.
-            if let Some(to) = to {
+            if let Some(TxKind::Call(to)) = to {
                 if to == DEFAULT_CREATE2_DEPLOYER {
                     // Size of the salt prefix.
                     offset = 32;
+                } else {
+                    continue;
                 }
-            } else if to.is_some() {
-                continue;
+            } else if let Some(TxKind::Create) = to {
+                // Pass
             }
 
             // Find artifact with a deployment code same as the data.
@@ -427,9 +421,9 @@ impl ScriptArgs {
                     prompt_user = self.broadcast;
                     shell::println(format!(
                         "{}",
-                        Paint::red(format!(
+                        format!(
                             "`{name}` is above the contract size limit ({deployment_size} > {max_size})."
-                        ))
+                        ).red()
                     ))?;
                 }
             }
@@ -525,7 +519,7 @@ pub struct ScriptConfig {
 impl ScriptConfig {
     pub async fn new(config: Config, evm_opts: EvmOpts) -> Result<Self> {
         let sender_nonce = if let Some(fork_url) = evm_opts.fork_url.as_ref() {
-            next_nonce(evm_opts.sender, fork_url, None).await?
+            next_nonce(evm_opts.sender, fork_url).await?
         } else {
             // dapptools compatibility
             1
@@ -535,7 +529,7 @@ impl ScriptConfig {
 
     pub async fn update_sender(&mut self, sender: Address) -> Result<()> {
         self.sender_nonce = if let Some(fork_url) = self.evm_opts.fork_url.as_ref() {
-            next_nonce(sender, fork_url, None).await?
+            next_nonce(sender, fork_url).await?
         } else {
             // dapptools compatibility
             1
@@ -550,16 +544,17 @@ impl ScriptConfig {
 
     async fn get_runner_with_cheatcodes(
         &mut self,
-        artifact_ids: Vec<ArtifactId>,
+        known_contracts: ContractsByArtifact,
         script_wallets: ScriptWallets,
         debug: bool,
+        target: ArtifactId,
     ) -> Result<ScriptRunner> {
-        self._get_runner(Some((artifact_ids, script_wallets)), debug).await
+        self._get_runner(Some((known_contracts, script_wallets, target)), debug).await
     }
 
     async fn _get_runner(
         &mut self,
-        cheats_data: Option<(Vec<ArtifactId>, ScriptWallets)>,
+        cheats_data: Option<(ContractsByArtifact, ScriptWallets, ArtifactId)>,
         debug: bool,
     ) -> Result<ScriptRunner> {
         trace!("preparing script runner");
@@ -588,7 +583,7 @@ impl ScriptConfig {
             .spec(self.config.evm_spec_id())
             .gas_limit(self.evm_opts.gas_limit());
 
-        if let Some((artifact_ids, script_wallets)) = cheats_data {
+        if let Some((known_contracts, script_wallets, target)) = cheats_data {
             builder = builder.inspectors(|stack| {
                 stack
                     .debug(debug)
@@ -596,8 +591,9 @@ impl ScriptConfig {
                         CheatsConfig::new(
                             &self.config,
                             self.evm_opts.clone(),
-                            Some(artifact_ids),
+                            Some(Arc::new(known_contracts)),
                             Some(script_wallets),
+                            Some(target.version),
                         )
                         .into(),
                     )

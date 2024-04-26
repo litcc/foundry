@@ -3,8 +3,7 @@
 use crate::constants::TEMPLATE_CONTRACT;
 use alloy_primitives::{Address, Bytes};
 use anvil::{spawn, NodeConfig};
-use foundry_common::rpc;
-use foundry_test_utils::{util::OutputExt, ScriptOutcome, ScriptTester};
+use foundry_test_utils::{rpc, util::OutputExt, ScriptOutcome, ScriptTester};
 use regex::Regex;
 use serde_json::Value;
 use std::{env, path::PathBuf, str::FromStr};
@@ -32,7 +31,7 @@ contract ContractScript is Script {
             )
             .unwrap();
 
-        let rpc = foundry_common::rpc::next_http_rpc_endpoint();
+        let rpc = foundry_test_utils::rpc::next_http_rpc_endpoint();
 
         cmd.arg("script").arg(script).args(["--fork-url", rpc.as_str(), "-vvvvv"]).assert_success();
     }
@@ -1230,4 +1229,95 @@ contract CustomErrorScript is Script {
 
     cmd.arg("script").arg(script).args(["--tc", "CustomErrorScript"]);
     assert!(cmd.stderr_lossy().contains("script failed: CustomError()"));
+});
+
+// https://github.com/foundry-rs/foundry/issues/7620
+forgetest_async!(can_run_zero_base_fee, |prj, cmd| {
+    foundry_test_utils::util::initialize(prj.root());
+    prj.add_script(
+        "Foo",
+        r#"
+import "forge-std/Script.sol";
+
+contract SimpleScript is Script {
+    function run() external {
+        vm.startBroadcast();
+        address(0).call("");
+    }
+}
+   "#,
+    )
+    .unwrap();
+
+    let node_config = NodeConfig::test().with_base_fee(Some(0));
+    let (_api, handle) = spawn(node_config).await;
+    let dev = handle.dev_accounts().next().unwrap();
+
+    // Firstly run script with non-zero gas prices to ensure that eth_feeHistory contains non-zero
+    // values.
+    cmd.args([
+        "script",
+        "SimpleScript",
+        "--fork-url",
+        &handle.http_endpoint(),
+        "--sender",
+        format!("{dev:?}").as_str(),
+        "--broadcast",
+        "--unlocked",
+        "--with-gas-price",
+        "2000000",
+        "--priority-gas-price",
+        "100000",
+    ]);
+
+    let output = cmd.stdout_lossy();
+    assert!(output.contains("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL"));
+
+    // Ensure that we can correctly estimate gas when base fee is zero but priority fee is not.
+    cmd.forge_fuse().args([
+        "script",
+        "SimpleScript",
+        "--fork-url",
+        &handle.http_endpoint(),
+        "--sender",
+        format!("{dev:?}").as_str(),
+        "--broadcast",
+        "--unlocked",
+    ]);
+
+    let output = cmd.stdout_lossy();
+    assert!(output.contains("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL"));
+});
+
+// https://github.com/foundry-rs/foundry/pull/7742
+forgetest_async!(unlocked_no_sender, |prj, cmd| {
+    foundry_test_utils::util::initialize(prj.root());
+    prj.add_script(
+        "Foo",
+        r#"
+import "forge-std/Script.sol";
+
+contract SimpleScript is Script {
+    function run() external {
+        vm.startBroadcast(0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266);
+        address(0).call("");
+    }
+}
+   "#,
+    )
+    .unwrap();
+
+    let (_api, handle) = spawn(NodeConfig::test()).await;
+
+    cmd.args([
+        "script",
+        "SimpleScript",
+        "--fork-url",
+        &handle.http_endpoint(),
+        "--broadcast",
+        "--unlocked",
+    ]);
+
+    let output = cmd.stdout_lossy();
+    assert!(output.contains("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL"));
 });

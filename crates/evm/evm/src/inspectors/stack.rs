@@ -7,10 +7,12 @@ use alloy_primitives::{Address, Bytes, Log, U256};
 use foundry_evm_core::{
     backend::{update_state, DatabaseExt},
     debug::DebugArena,
+    InspectorExt,
 };
 use foundry_evm_coverage::HitMaps;
 use foundry_evm_traces::CallTraceArena;
 use revm::{
+    inspectors::CustomPrintTracer,
     interpreter::{
         CallInputs, CallOutcome, CallScheme, CreateInputs, CreateOutcome, Gas, InstructionResult,
         Interpreter, InterpreterResult,
@@ -45,6 +47,8 @@ pub struct InspectorStackBuilder {
     pub logs: Option<bool>,
     /// Whether coverage info should be collected.
     pub coverage: Option<bool>,
+    /// Whether to print all opcode traces into the console. Useful for debugging the EVM.
+    pub print: Option<bool>,
     /// The chisel state inspector.
     pub chisel_state: Option<usize>,
     /// Whether to enable call isolation.
@@ -116,6 +120,13 @@ impl InspectorStackBuilder {
         self
     }
 
+    /// Set whether to enable the trace printer.
+    #[inline]
+    pub fn print(mut self, yes: bool) -> Self {
+        self.print = Some(yes);
+        self
+    }
+
     /// Set whether to enable the tracer.
     #[inline]
     pub fn trace(mut self, yes: bool) -> Self {
@@ -144,6 +155,7 @@ impl InspectorStackBuilder {
             debug,
             logs,
             coverage,
+            print,
             chisel_state,
             enable_isolation,
         } = self;
@@ -162,6 +174,7 @@ impl InspectorStackBuilder {
         stack.collect_coverage(coverage.unwrap_or(false));
         stack.collect_logs(logs.unwrap_or(true));
         stack.enable_debugger(debug.unwrap_or(false));
+        stack.print(print.unwrap_or(false));
         stack.tracing(trace.unwrap_or(false));
 
         stack.enable_isolation(enable_isolation);
@@ -274,6 +287,7 @@ pub struct InspectorStack {
     pub debugger: Option<Debugger>,
     pub fuzzer: Option<Fuzzer>,
     pub log_collector: Option<LogCollector>,
+    pub printer: Option<CustomPrintTracer>,
     pub tracer: Option<TracingInspector>,
     pub customizable: Option<Customizable>,
     pub enable_isolation: bool,
@@ -357,6 +371,12 @@ impl InspectorStack {
     #[inline]
     pub fn collect_logs(&mut self, yes: bool) {
         self.log_collector = yes.then(Default::default);
+    }
+
+    /// Set whether to enable the trace printer.
+    #[inline]
+    pub fn print(&mut self, yes: bool) {
+        self.printer = yes.then(Default::default);
     }
 
     /// Set whether to enable the tracer.
@@ -525,9 +545,7 @@ impl InspectorStack {
             if let Some(acc_mut) = ecx.journaled_state.state.get_mut(&addr) {
                 acc_mut.status |= acc.status;
                 for (key, val) in acc.storage {
-                    if !acc_mut.storage.contains_key(&key) {
-                        acc_mut.storage.insert(key, val);
-                    }
+                    acc_mut.storage.entry(key).or_insert(val);
                 }
             } else {
                 ecx.journaled_state.state.insert(addr, acc);
@@ -792,5 +810,22 @@ impl<DB: DatabaseExt + DatabaseCommit> Inspector<&mut DB> for InspectorStack {
         call_inspectors!([&mut self.customizable, &mut self.tracer], |inspector| {
             Inspector::<DB>::selfdestruct(inspector, contract, target, value)
         });
+    }
+}
+
+impl<DB: DatabaseExt + DatabaseCommit> InspectorExt<&mut DB> for InspectorStack {
+    fn should_use_create2_factory(
+        &mut self,
+        ecx: &mut EvmContext<&mut DB>,
+        inputs: &mut CreateInputs,
+    ) -> bool {
+        call_inspectors_adjust_depth!(
+            [&mut self.cheatcodes],
+            |inspector| { inspector.should_use_create2_factory(ecx, inputs).then_some(true) },
+            self,
+            ecx
+        );
+
+        false
     }
 }

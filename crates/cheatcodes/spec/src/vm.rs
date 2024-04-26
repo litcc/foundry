@@ -3,6 +3,7 @@
 #![allow(missing_docs)]
 
 use super::*;
+use crate::Vm::ForgeContext;
 use alloy_sol_types::sol;
 use foundry_macros::Cheatcode;
 
@@ -63,6 +64,28 @@ interface Vm {
         Extcodecopy,
     }
 
+    /// Forge execution contexts.
+    enum ForgeContext {
+        /// Test group execution context (test, coverage or snapshot).
+        TestGroup,
+        /// `forge test` execution context.
+        Test,
+        /// `forge coverage` execution context.
+        Coverage,
+        /// `forge snapshot` execution context.
+        Snapshot,
+        /// Script group execution context (dry run, broadcast or resume).
+        ScriptGroup,
+        /// `forge script` execution context.
+        ScriptDryRun,
+        /// `forge script --broadcast` execution context.
+        ScriptBroadcast,
+        /// `forge script --resume` execution context.
+        ScriptResume,
+        /// Unknown `forge` execution context.
+        Unknown,
+    }
+
     /// An Ethereum log. Returned by `getRecordedLogs`.
     struct Log {
         /// The topics of the log, including the signature, if any.
@@ -71,6 +94,20 @@ interface Vm {
         bytes data;
         /// The address of the log's emitter.
         address emitter;
+    }
+
+    /// Gas used. Returned by `lastCallGas`.
+    struct Gas {
+        /// The gas limit of the call.
+        uint64 gasLimit;
+        /// The total gas used.
+        uint64 gasTotalUsed;
+        /// The amount of gas used for memory expansion.
+        uint64 gasMemoryUsed;
+        /// The amount of gas refunded.
+        int64 gasRefunded;
+        /// The amount of gas remaining.
+        uint64 gasRemaining;
     }
 
     /// An RPC URL and its alias. Returned by `rpcUrlStructs`.
@@ -169,6 +206,22 @@ interface Vm {
         uint256 chainId;
     }
 
+    /// The storage accessed during an `AccountAccess`.
+    struct StorageAccess {
+        /// The account whose storage was accessed.
+        address account;
+        /// The slot that was accessed.
+        bytes32 slot;
+        /// If the access was a write.
+        bool isWrite;
+        /// The previous value of the slot.
+        bytes32 previousValue;
+        /// The new value of the slot.
+        bytes32 newValue;
+        /// If the access was reverted.
+        bool reverted;
+    }
+
     /// The result of a `stopAndReturnStateDiff` call.
     struct AccountAccess {
         /// The chain and fork the access occurred.
@@ -205,22 +258,6 @@ interface Vm {
         StorageAccess[] storageAccesses;
         /// Call depth traversed during the recording of state differences
         uint64 depth;
-    }
-
-    /// The storage accessed during an `AccountAccess`.
-    struct StorageAccess {
-        /// The account whose storage was accessed.
-        address account;
-        /// The slot that was accessed.
-        bytes32 slot;
-        /// If the access was a write.
-        bool isWrite;
-        /// The previous value of the slot.
-        bytes32 previousValue;
-        /// The new value of the slot.
-        bytes32 newValue;
-        /// If the access was reverted.
-        bool reverted;
     }
 
     // ======== EVM ========
@@ -338,6 +375,23 @@ interface Vm {
     /// If used on unsupported EVM versions it will revert.
     #[cheatcode(group = Evm, safety = Unsafe)]
     function prevrandao(bytes32 newPrevrandao) external;
+    /// Sets `block.prevrandao`.
+    /// Not available on EVM versions before Paris. Use `difficulty` instead.
+    /// If used on unsupported EVM versions it will revert.
+    #[cheatcode(group = Evm, safety = Unsafe)]
+    function prevrandao(uint256 newPrevrandao) external;
+
+    /// Sets the blobhashes in the transaction.
+    /// Not available on EVM versions before Cancun.
+    /// If used on unsupported EVM versions it will revert.
+    #[cheatcode(group = Evm, safety = Unsafe)]
+    function blobhashes(bytes32[] calldata blobhashes) external;
+
+    /// Gets the blockhashes from the current transaction.
+    /// Not available on EVM versions before Cancun.
+    /// If used on unsupported EVM versions it will revert.
+    #[cheatcode(group = Evm, safety = Unsafe)]
+    function getBlobhashes() external view returns (bytes32[] memory blobhashes);
 
     /// Sets `block.height`.
     #[cheatcode(group = Evm, safety = Unsafe)]
@@ -364,6 +418,17 @@ interface Vm {
     /// See https://github.com/foundry-rs/foundry/issues/6180
     #[cheatcode(group = Evm, safety = Safe)]
     function getBlockTimestamp() external view returns (uint256 timestamp);
+
+    /// Sets `block.blobbasefee`
+    #[cheatcode(group = Evm, safety = Unsafe)]
+    function blobBaseFee(uint256 newBlobBaseFee) external;
+
+    /// Gets the current `block.blobbasefee`.
+    /// You should use this instead of `block.blobbasefee` if you use `vm.blobBaseFee`, as `block.blobbasefee` is assumed to be constant across a transaction,
+    /// and as a result will get optimized out by the compiler.
+    /// See https://github.com/foundry-rs/foundry/issues/6180
+    #[cheatcode(group = Evm, safety = Safe)]
+    function getBlobBaseFee() external view returns (uint256 blobBaseFee);
 
     // -------- Account State --------
 
@@ -594,6 +659,7 @@ interface Vm {
     function getRecordedLogs() external returns (Log[] memory logs);
 
     // -------- Gas Metering --------
+
     // It's recommend to use the `noGasMetering` modifier included with forge-std, instead of
     // using these functions directly.
 
@@ -604,6 +670,12 @@ interface Vm {
     /// Resumes gas metering (i.e. gas usage is counted again). Noop if already on.
     #[cheatcode(group = Evm, safety = Safe)]
     function resumeGasMetering() external;
+
+    // -------- Gas Measurement --------
+
+    /// Gets the gas used in the last call.
+    #[cheatcode(group = Evm, safety = Safe)]
+    function lastCallGas() external view returns (Gas memory gas);
 
     // ======== Test Assertions and Utilities ========
 
@@ -1427,11 +1499,23 @@ interface Vm {
     #[cheatcode(group = Filesystem)]
     function promptSecret(string calldata promptText) external returns (string memory input);
 
+    /// Prompts the user for an address in the terminal.
+    #[cheatcode(group = Filesystem)]
+    function promptAddress(string calldata promptText) external returns (address);
+
+    /// Prompts the user for uint256 in the terminal.
+    #[cheatcode(group = Filesystem)]
+    function promptUint(string calldata promptText) external returns (uint256);
+
     // ======== Environment Variables ========
 
     /// Sets environment variables.
     #[cheatcode(group = Environment)]
     function setEnv(string calldata name, string calldata value) external;
+
+    /// Gets the environment variable `name` and returns true if it exists, else returns false.
+    #[cheatcode(group = Environment)]
+    function envExists(string calldata name) external view returns (bool result);
 
     /// Gets the environment variable `name` and parses it as `bool`.
     /// Reverts if the variable was not found or could not be parsed.
@@ -1577,6 +1661,10 @@ interface Vm {
         external view
         returns (bytes[] memory value);
 
+    /// Returns true if `forge` command was executed in given context.
+    #[cheatcode(group = Environment)]
+    function isContext(ForgeContext context) external view returns (bool result);
+
     // ======== Scripts ========
 
     // -------- Broadcasting Transactions --------
@@ -1684,7 +1772,7 @@ interface Vm {
     /// Returns `NOT_FOUND` (i.e. `type(uint256).max`) if the `key` is not found.
     /// Returns 0 in case of an empty `key`.
     #[cheatcode(group = String)]
-    function indexOf(string memory input, string memory key) external pure returns (uint256);
+    function indexOf(string calldata input, string calldata key) external pure returns (uint256);
 
     // ======== JSON Parsing and Manipulation ========
 
@@ -1785,6 +1873,11 @@ interface Vm {
     /// See `serializeJson`.
     #[cheatcode(group = Json)]
     function serializeUint(string calldata objectKey, string calldata valueKey, uint256 value)
+        external
+        returns (string memory json);
+    /// See `serializeJson`.
+    #[cheatcode(group = Json)]
+    function serializeUintToHex(string calldata objectKey, string calldata valueKey, uint256 value)
         external
         returns (string memory json);
     /// See `serializeJson`.
@@ -2043,4 +2136,31 @@ interface Vm {
     #[cheatcode(group = Utilities)]
     function toBase64URL(string calldata data) external pure returns (string memory);
 }
+}
+
+impl PartialEq for ForgeContext {
+    // Handles test group case (any of test, coverage or snapshot)
+    // and script group case (any of dry run, broadcast or resume).
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (_, &ForgeContext::TestGroup) => {
+                self == &ForgeContext::Test ||
+                    self == &ForgeContext::Snapshot ||
+                    self == &ForgeContext::Coverage
+            }
+            (_, &ForgeContext::ScriptGroup) => {
+                self == &ForgeContext::ScriptDryRun ||
+                    self == &ForgeContext::ScriptBroadcast ||
+                    self == &ForgeContext::ScriptResume
+            }
+            (&ForgeContext::Test, &ForgeContext::Test) |
+            (&ForgeContext::Snapshot, &ForgeContext::Snapshot) |
+            (&ForgeContext::Coverage, &ForgeContext::Coverage) |
+            (&ForgeContext::ScriptDryRun, &ForgeContext::ScriptDryRun) |
+            (&ForgeContext::ScriptBroadcast, &ForgeContext::ScriptBroadcast) |
+            (&ForgeContext::ScriptResume, &ForgeContext::ScriptResume) |
+            (&ForgeContext::Unknown, &ForgeContext::Unknown) => true,
+            _ => false,
+        }
+    }
 }

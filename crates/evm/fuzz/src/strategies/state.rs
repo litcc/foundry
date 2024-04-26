@@ -1,14 +1,10 @@
-use super::fuzz_param_from_state;
 use crate::invariant::{ArtifactFilters, FuzzRunIdentifiedContracts};
-use alloy_dyn_abi::JsonAbiExt;
-use alloy_json_abi::Function;
-use alloy_primitives::{Address, Bytes, Log, B256, U256};
+use alloy_primitives::{Address, Log, B256, U256};
 use foundry_common::contracts::{ContractsByAddress, ContractsByArtifact};
 use foundry_config::FuzzDictionaryConfig;
 use foundry_evm_core::utils::StateChangeset;
 use indexmap::IndexSet;
 use parking_lot::{lock_api::RwLockReadGuard, RawRwLock, RwLock};
-use proptest::prelude::{BoxedStrategy, Strategy};
 use revm::{
     db::{CacheDB, DatabaseRef},
     interpreter::opcode::{self, spec_opcode_gas},
@@ -181,29 +177,6 @@ impl FuzzDictionary {
     }
 }
 
-/// Given a function and some state, it returns a strategy which generated valid calldata for the
-/// given function's input types, based on state taken from the EVM.
-pub fn fuzz_calldata_from_state(func: Function, state: &EvmFuzzState) -> BoxedStrategy<Bytes> {
-    let strats = func
-        .inputs
-        .iter()
-        .map(|input| fuzz_param_from_state(&input.selector_type().parse().unwrap(), state))
-        .collect::<Vec<_>>();
-    strats
-        .prop_map(move |values| {
-            func.abi_encode_input(&values)
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "Fuzzer generated invalid arguments for function `{}` with inputs {:?}: {:?}",
-                        func.name, func.inputs, values
-                    )
-                })
-                .into()
-        })
-        .no_shrink()
-        .boxed()
-}
-
 /// Builds the initial [EvmFuzzState] from a database.
 pub fn build_initial_state<DB: DatabaseRef>(
     db: &CacheDB<DB>,
@@ -212,7 +185,11 @@ pub fn build_initial_state<DB: DatabaseRef>(
     let mut values = IndexSet::new();
     let mut addresses = IndexSet::new();
 
-    for (address, account) in db.accounts.iter() {
+    // Sort accounts to ensure deterministic dictionary generation from the same setUp state.
+    let mut accs = db.accounts.iter().collect::<Vec<_>>();
+    accs.sort_by_key(|(address, _)| *address);
+
+    for (address, account) in accs {
         let address: Address = *address;
         // Insert basic account information
         values.insert(address.into_word().into());
@@ -304,23 +281,25 @@ pub fn collect_created_contracts(
     project_contracts: &ContractsByArtifact,
     setup_contracts: &ContractsByAddress,
     artifact_filters: &ArtifactFilters,
-    targeted_contracts: FuzzRunIdentifiedContracts,
+    targeted_contracts: &FuzzRunIdentifiedContracts,
     created_contracts: &mut Vec<Address>,
 ) -> eyre::Result<()> {
-    let mut writable_targeted = targeted_contracts.lock();
+    let mut writable_targeted = targeted_contracts.targets.lock();
     for (address, account) in state_changeset {
         if !setup_contracts.contains_key(address) {
             if let (true, Some(code)) = (&account.is_touched(), &account.info.code) {
                 if !code.is_empty() {
-                    if let Some((artifact, (abi, _))) =
-                        project_contracts.find_by_code(&code.original_bytes())
+                    if let Some((artifact, contract)) =
+                        project_contracts.find_by_deployed_code(&code.original_bytes())
                     {
                         if let Some(functions) =
-                            artifact_filters.get_targeted_functions(artifact, abi)?
+                            artifact_filters.get_targeted_functions(artifact, &contract.abi)?
                         {
                             created_contracts.push(*address);
-                            writable_targeted
-                                .insert(*address, (artifact.name.clone(), abi.clone(), functions));
+                            writable_targeted.insert(
+                                *address,
+                                (artifact.name.clone(), contract.abi.clone(), functions),
+                            );
                         }
                     }
                 }
