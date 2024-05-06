@@ -36,7 +36,6 @@ impl WalletSigner {
     }
 
     pub async fn from_trezor_path(path: TrezorHDPath) -> Result<Self> {
-        // cached to ~/.ethers-rs/trezor/cache/trezor.session
         let trezor = TrezorSigner::new(path, None).await?;
         Ok(Self::Trezor(trezor))
     }
@@ -174,15 +173,15 @@ impl Signer for WalletSigner {
 
 #[async_trait]
 impl TxSigner<Signature> for WalletSigner {
+    fn address(&self) -> Address {
+        delegate!(self, inner => alloy_signer::Signer::address(inner))
+    }
+
     async fn sign_transaction(
         &self,
         tx: &mut dyn SignableTransaction<Signature>,
     ) -> alloy_signer::Result<Signature> {
         delegate!(self, inner => inner.sign_transaction(tx)).await
-    }
-
-    fn address(&self) -> Address {
-        delegate!(self, inner => alloy_signer::Signer::address(inner))
     }
 }
 

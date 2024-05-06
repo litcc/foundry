@@ -17,7 +17,6 @@ use foundry_cli::{
 use foundry_common::{
     compile::{self},
     fmt::parse_tokens,
-    provider::alloy::estimate_eip1559_fees,
 };
 use foundry_compilers::{artifacts::BytecodeObject, info::ContractInfo, utils::canonicalize};
 use serde_json::json;
@@ -243,16 +242,16 @@ impl CreateArgs {
             provider.get_transaction_count(deployer_address, BlockId::latest()).await
         }?);
 
+        // set tx value if specified
+        if let Some(value) = self.tx.value {
+            deployer.tx.set_value(value);
+        }
+
         deployer.tx.set_gas_limit(if let Some(gas_limit) = self.tx.gas_limit {
             Ok(gas_limit.to())
         } else {
             provider.estimate_gas(&deployer.tx, BlockId::latest()).await
         }?);
-
-        // set tx value if specified
-        if let Some(value) = self.tx.value {
-            deployer.tx.set_value(value);
-        }
 
         if is_legacy {
             let gas_price = if let Some(gas_price) = self.tx.gas_price {
@@ -262,9 +261,7 @@ impl CreateArgs {
             };
             deployer.tx.set_gas_price(gas_price);
         } else {
-            let estimate = estimate_eip1559_fees(&provider, Some(chain))
-                .await
-                .wrap_err("Failed to estimate EIP1559 fees. This chain might not support EIP1559, try adding --legacy to your command.")?;
+            let estimate = provider.estimate_eip1559_fees(None).await.wrap_err("Failed to estimate EIP1559 fees. This chain might not support EIP1559, try adding --legacy to your command.")?;
             let priority_fee = if let Some(priority_fee) = self.tx.priority_gas_price {
                 priority_fee.to()
             } else {
