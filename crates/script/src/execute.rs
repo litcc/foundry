@@ -9,7 +9,6 @@ use alloy_dyn_abi::FunctionExt;
 use alloy_json_abi::{Function, InternalType, JsonAbi};
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider;
-use alloy_rpc_types::request::TransactionRequest;
 use async_recursion::async_recursion;
 use eyre::{OptionExt, Result};
 use foundry_cheatcodes::ScriptWallets;
@@ -17,13 +16,13 @@ use foundry_cli::utils::{ensure_clean_constructor, needs_setup};
 use foundry_common::{
     fmt::{format_token, format_token_raw},
     provider::get_http_provider,
-    shell, ContractData, ContractsByArtifact,
+    shell, ContractsByArtifact,
 };
 use foundry_config::{Config, NamedChain};
 use foundry_debugger::Debugger;
 use foundry_evm::{
     decode::decode_console_logs,
-    inspectors::cheatcodes::{BroadcastableTransaction, BroadcastableTransactions},
+    inspectors::cheatcodes::BroadcastableTransactions,
     traces::{
         identifier::{SignaturesIdentifier, TraceIdentifiers},
         render_trace_arena, CallTraceDecoder, CallTraceDecoderBuilder, TraceKind,
@@ -44,6 +43,7 @@ pub struct LinkedState {
 }
 
 /// Container for data we need for execution which can only be obtained after linking stage.
+#[derive(Debug)]
 pub struct ExecutionData {
     /// Function to call.
     pub func: Function,
@@ -61,25 +61,31 @@ impl LinkedState {
     pub async fn prepare_execution(self) -> Result<PreExecutionState> {
         let Self { args, script_config, script_wallets, build_data } = self;
 
-        let ContractData { abi, bytecode, .. } = build_data.get_target_contract()?;
+        let target_contract = build_data.get_target_contract()?;
 
-        let bytecode = bytecode.ok_or_eyre("target contract has no bytecode")?;
+        let bytecode = target_contract.bytecode().ok_or_eyre("target contract has no bytecode")?;
 
-        let (func, calldata) = args.get_method_and_calldata(&abi)?;
+        let (func, calldata) = args.get_method_and_calldata(&target_contract.abi)?;
 
-        ensure_clean_constructor(&abi)?;
+        ensure_clean_constructor(&target_contract.abi)?;
 
         Ok(PreExecutionState {
             args,
             script_config,
             script_wallets,
             build_data,
-            execution_data: ExecutionData { func, calldata, bytecode, abi },
+            execution_data: ExecutionData {
+                func,
+                calldata,
+                bytecode: bytecode.clone(),
+                abi: target_contract.abi,
+            },
         })
     }
 }
 
 /// Same as [LinkedState], but also contains [ExecutionData].
+#[derive(Debug)]
 pub struct PreExecutionState {
     pub args: ScriptArgs,
     pub script_config: ScriptConfig,
@@ -102,7 +108,7 @@ impl PreExecutionState {
                 self.build_data.build_data.target.clone(),
             )
             .await?;
-        let mut result = self.execute_with_runner(&mut runner).await?;
+        let result = self.execute_with_runner(&mut runner).await?;
 
         // If we have a new sender from execution, we need to use it to deploy libraries and relink
         // contracts.
@@ -117,28 +123,7 @@ impl PreExecutionState {
                 build_data: self.build_data.build_data,
             };
 
-            return state.link()?.prepare_execution().await?.execute().await;
-        }
-
-        // Add library deployment transactions to broadcastable transactions list.
-        if let Some(txs) = result.transactions.take() {
-            result.transactions = Some(
-                self.build_data
-                    .predeploy_libraries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, bytes)| BroadcastableTransaction {
-                        rpc: self.script_config.evm_opts.fork_url.clone(),
-                        transaction: TransactionRequest {
-                            from: Some(self.script_config.evm_opts.sender),
-                            input: Some(bytes.clone()).into(),
-                            nonce: Some(self.script_config.sender_nonce + i as u64),
-                            ..Default::default()
-                        },
-                    })
-                    .chain(txs)
-                    .collect(),
-            );
+            return state.link().await?.prepare_execution().await?.execute().await;
         }
 
         Ok(ExecutedState {
@@ -200,7 +185,7 @@ impl PreExecutionState {
 
         if let Some(txs) = transactions {
             // If the user passed a `--sender` don't check anything.
-            if !self.build_data.predeploy_libraries.is_empty() &&
+            if self.build_data.predeploy_libraries.libraries_count() > 0 &&
                 self.args.evm_opts.sender.is_none()
             {
                 for tx in txs.iter() {
@@ -298,7 +283,7 @@ impl ExecutedState {
     pub async fn prepare_simulation(self) -> Result<PreSimulationState> {
         let returns = self.get_returns()?;
 
-        let decoder = self.build_trace_decoder(&self.build_data.known_contracts)?;
+        let decoder = self.build_trace_decoder(&self.build_data.known_contracts).await?;
 
         let txs = self.execution_result.transactions.clone().unwrap_or_default();
         let rpc_data = RpcData::from_transactions(&txs);
@@ -328,7 +313,7 @@ impl ExecutedState {
     }
 
     /// Builds [CallTraceDecoder] from the execution result and known contracts.
-    fn build_trace_decoder(
+    async fn build_trace_decoder(
         &self,
         known_contracts: &ContractsByArtifact,
     ) -> Result<CallTraceDecoder> {
@@ -344,7 +329,7 @@ impl ExecutedState {
 
         let mut identifier = TraceIdentifiers::new().with_local(known_contracts).with_etherscan(
             &self.script_config.config,
-            self.script_config.evm_opts.get_remote_chain_id(),
+            self.script_config.evm_opts.get_remote_chain_id().await,
         )?;
 
         // Decoding traces using etherscan is costly as we run into rate limits,

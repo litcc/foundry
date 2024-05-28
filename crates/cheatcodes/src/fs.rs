@@ -356,27 +356,30 @@ fn get_artifact_code(state: &Cheatcodes, path: &str, deployed: bool) -> Result<B
             }?;
 
             let maybe_bytecode = if deployed {
-                artifact.1.deployed_bytecode.clone()
+                artifact.1.deployed_bytecode().cloned()
             } else {
-                artifact.1.bytecode.clone()
+                artifact.1.bytecode().cloned()
             };
 
             return maybe_bytecode
                 .ok_or_else(|| fmt_err!("No bytecode for contract. Is it abstract or unlinked?"));
         } else {
-            match (file.map(|f| f.to_string_lossy().to_string()), contract_name) {
-                (Some(file), Some(contract_name)) => {
-                    PathBuf::from(format!("{file}/{contract_name}.json"))
-                }
-                (None, Some(contract_name)) => {
-                    PathBuf::from(format!("{contract_name}.sol/{contract_name}.json"))
-                }
-                (Some(file), None) => {
-                    let name = file.replace(".sol", "");
-                    PathBuf::from(format!("{file}/{name}.json"))
-                }
-                _ => return Err(fmt_err!("Invalid artifact path")),
-            }
+            let path_in_artifacts =
+                match (file.map(|f| f.to_string_lossy().to_string()), contract_name) {
+                    (Some(file), Some(contract_name)) => {
+                        PathBuf::from(format!("{file}/{contract_name}.json"))
+                    }
+                    (None, Some(contract_name)) => {
+                        PathBuf::from(format!("{contract_name}.sol/{contract_name}.json"))
+                    }
+                    (Some(file), None) => {
+                        let name = file.replace(".sol", "");
+                        PathBuf::from(format!("{file}/{name}.json"))
+                    }
+                    _ => return Err(fmt_err!("Invalid artifact path")),
+                };
+
+            state.config.paths.artifacts.join(path_in_artifacts)
         }
     };
 
@@ -526,13 +529,13 @@ fn prompt(
 ) -> Result<String> {
     let text_clone = prompt_text.to_string();
     let timeout = state.config.prompt_timeout;
-    let (send, recv) = mpsc::channel();
+    let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        send.send(input(&text_clone)).unwrap();
+        let _ = tx.send(input(&text_clone));
     });
 
-    match recv.recv_timeout(timeout) {
+    match rx.recv_timeout(timeout) {
         Ok(res) => res.map_err(|err| {
             println!();
             err.to_string().into()

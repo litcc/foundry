@@ -120,7 +120,7 @@ where
         func: Option<&Function>,
         block: Option<BlockId>,
     ) -> Result<String> {
-        let res = self.provider.call(req, block.unwrap_or_default()).await?;
+        let res = self.provider.call(req).block(block.unwrap_or_default()).await?;
 
         let mut decoded = vec![];
 
@@ -133,8 +133,11 @@ where
                     if res.is_empty() {
                         // check that the recipient is a contract that can be called
                         if let Some(TxKind::Call(addr)) = req.to {
-                            if let Ok(code) =
-                                self.provider.get_code_at(addr, block.unwrap_or_default()).await
+                            if let Ok(code) = self
+                                .provider
+                                .get_code_at(addr)
+                                .block_id(block.unwrap_or_default())
+                                .await
                             {
                                 if code.is_empty() {
                                     eyre::bail!("contract {addr:?} does not have any code")
@@ -198,7 +201,7 @@ where
         to_json: bool,
     ) -> Result<String> {
         let access_list =
-            self.provider.create_access_list(req, block.unwrap_or(BlockId::latest())).await?;
+            self.provider.create_access_list(req).block_id(block.unwrap_or_default()).await?;
         let res = if to_json {
             serde_json::to_string(&access_list)?
         } else {
@@ -220,7 +223,7 @@ where
     }
 
     pub async fn balance(&self, who: Address, block: Option<BlockId>) -> Result<U256> {
-        Ok(self.provider.get_balance(who, block.unwrap_or(BlockId::latest())).await?)
+        Ok(self.provider.get_balance(who).block_id(block.unwrap_or_default()).await?)
     }
 
     /// Sends a transaction to the specified address
@@ -472,7 +475,7 @@ where
     /// # }
     /// ```
     pub async fn nonce(&self, who: Address, block: Option<BlockId>) -> Result<u64> {
-        Ok(self.provider.get_transaction_count(who, block.unwrap_or(BlockId::latest())).await?)
+        Ok(self.provider.get_transaction_count(who).block_id(block.unwrap_or_default()).await?)
     }
 
     /// # Example
@@ -498,7 +501,8 @@ where
             B256::from_str("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc")?;
         let value = self
             .provider
-            .get_storage_at(who, slot.into(), block.unwrap_or(BlockId::latest()))
+            .get_storage_at(who, slot.into())
+            .block_id(block.unwrap_or_default())
             .await?;
         let addr = Address::from_word(value.into());
         Ok(format!("{addr:?}"))
@@ -527,7 +531,8 @@ where
             B256::from_str("0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103")?;
         let value = self
             .provider
-            .get_storage_at(who, slot.into(), block.unwrap_or(BlockId::latest()))
+            .get_storage_at(who, slot.into())
+            .block_id(block.unwrap_or_default())
             .await?;
         let addr = Address::from_word(value.into());
         Ok(format!("{addr:?}"))
@@ -581,10 +586,14 @@ where
         disassemble: bool,
     ) -> Result<String> {
         if disassemble {
-            let code = self.provider.get_code_at(who, block.unwrap_or_default()).await?.to_vec();
+            let code =
+                self.provider.get_code_at(who).block_id(block.unwrap_or_default()).await?.to_vec();
             Ok(format_operations(disassemble_bytes(code)?)?)
         } else {
-            Ok(format!("{}", self.provider.get_code_at(who, block.unwrap_or_default()).await?))
+            Ok(format!(
+                "{}",
+                self.provider.get_code_at(who).block_id(block.unwrap_or_default()).await?
+            ))
         }
     }
 
@@ -607,7 +616,8 @@ where
     /// # }
     /// ```
     pub async fn codesize(&self, who: Address, block: Option<BlockId>) -> Result<String> {
-        let code = self.provider.get_code_at(who, block.unwrap_or_default()).await?.to_vec();
+        let code =
+            self.provider.get_code_at(who).block_id(block.unwrap_or_default()).await?.to_vec();
         Ok(format!("{}", code.len()))
     }
 
@@ -635,7 +645,11 @@ where
         to_json: bool,
     ) -> Result<String> {
         let tx_hash = TxHash::from_str(&tx_hash).wrap_err("invalid tx hash")?;
-        let tx = self.provider.get_transaction_by_hash(tx_hash).await?;
+        let tx = self
+            .provider
+            .get_transaction_by_hash(tx_hash)
+            .await?
+            .ok_or_else(|| eyre::eyre!("tx not found: {:?}", tx_hash))?;
 
         Ok(if raw {
             format!("0x{}", hex::encode(TxEnvelope::try_from(tx.inner)?.encoded_2718()))
@@ -769,7 +783,8 @@ where
             "{:?}",
             B256::from(
                 self.provider
-                    .get_storage_at(from, slot.into(), block.unwrap_or(BlockId::latest()))
+                    .get_storage_at(from, slot.into())
+                    .block_id(block.unwrap_or_default())
                     .await?
             )
         ))
@@ -1047,6 +1062,24 @@ impl SimpleCast {
     /// ```
     pub fn from_utf8(s: &str) -> String {
         hex::encode_prefixed(s)
+    }
+
+    /// Converts hex input to UTF-8 text
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cast::SimpleCast as Cast;
+    ///
+    /// assert_eq!(Cast::to_utf8("0x796f")?, "yo");
+    /// assert_eq!(Cast::to_utf8("0x48656c6c6f2c20576f726c6421")?, "Hello, World!");
+    /// assert_eq!(Cast::to_utf8("0x547572626f44617070546f6f6c73")?, "TurboDappTools");
+    /// assert_eq!(Cast::to_utf8("0xe4bda0e5a5bd")?, "你好");
+    /// # Ok::<_, eyre::Report>(())
+    /// ```
+    pub fn to_utf8(s: &str) -> Result<String> {
+        let bytes = hex::decode(s)?;
+        Ok(String::from_utf8_lossy(bytes.as_ref()).to_string())
     }
 
     /// Converts hex data into text data

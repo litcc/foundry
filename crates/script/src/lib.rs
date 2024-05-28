@@ -228,7 +228,8 @@ impl ScriptArgs {
         } else {
             // Drive state machine to point at which we have everything needed for simulation.
             let pre_simulation = compiled
-                .link()?
+                .link()
+                .await?
                 .prepare_execution()
                 .await?
                 .execute()
@@ -360,8 +361,8 @@ impl ScriptArgs {
 
         // From artifacts
         for (artifact, contract) in known_contracts.iter() {
-            let Some(bytecode) = &contract.bytecode else { continue };
-            let Some(deployed_bytecode) = &contract.deployed_bytecode else { continue };
+            let Some(bytecode) = contract.bytecode() else { continue };
+            let Some(deployed_bytecode) = contract.deployed_bytecode() else { continue };
             bytecodes.push((artifact.name.clone(), bytecode, deployed_bytecode));
         }
 
@@ -600,11 +601,7 @@ impl ScriptConfig {
             });
         }
 
-        Ok(ScriptRunner::new(
-            builder.build(env, db),
-            self.evm_opts.initial_balance,
-            self.evm_opts.sender,
-        ))
+        Ok(ScriptRunner::new(builder.build(env, db), self.evm_opts.clone()))
     }
 }
 

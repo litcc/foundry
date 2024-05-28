@@ -16,10 +16,7 @@ use foundry_evm_fuzz::{
         ArtifactFilters, BasicTxDetails, FuzzRunIdentifiedContracts, InvariantContract,
         RandomCallGenerator, SenderFilters, TargetedContracts,
     },
-    strategies::{
-        build_initial_state, collect_created_contracts, invariant_strat, override_call_strat,
-        EvmFuzzState,
-    },
+    strategies::{collect_created_contracts, invariant_strat, override_call_strat, EvmFuzzState},
     FuzzCase, FuzzFixtures, FuzzedCases,
 };
 use foundry_evm_traces::CallTraceArena;
@@ -29,7 +26,7 @@ use proptest::{
     test_runner::{TestCaseError, TestRunner},
 };
 use result::{assert_invariants, can_continue};
-use revm::{primitives::HashMap, DatabaseCommit};
+use revm::primitives::HashMap;
 use shrink::shrink_sequence;
 use std::{cell::RefCell, collections::BTreeMap, sync::Arc};
 
@@ -43,6 +40,7 @@ mod result;
 pub use result::InvariantFuzzTestResult;
 
 mod shrink;
+pub use shrink::check_sequence;
 
 sol! {
     interface IInvariantTest {
@@ -147,10 +145,6 @@ impl<'a> InvariantExecutor<'a> {
             return Err(eyre!("Invariant test function should have no inputs"))
         }
 
-        if !self.config.shrink_sequence {
-            error!(target: "forge::test", "shrink_sequence config is deprecated and will be removed, use shrink_run_limit = 0")
-        }
-
         let (fuzz_state, targeted_contracts, strat) =
             self.prepare_fuzzing(&invariant_contract, fuzz_fixtures)?;
 
@@ -212,18 +206,21 @@ impl<'a> InvariantExecutor<'a> {
             let mut assume_rejects_counter = 0;
 
             while current_run < self.config.depth {
-                let (sender, (address, calldata)) = inputs.last().expect("no input generated");
+                let tx = inputs.last().ok_or_else(|| {
+                    TestCaseError::fail("No input generated to call fuzzed target.")
+                })?;
 
-                // Executes the call from the randomly generated sequence.
-                let call_result = if self.config.preserve_state {
-                    executor
-                        .call_raw_committing(*sender, *address, calldata.clone(), U256::ZERO)
-                        .expect("could not make raw evm call")
-                } else {
-                    executor
-                        .call_raw(*sender, *address, calldata.clone(), U256::ZERO)
-                        .expect("could not make raw evm call")
-                };
+                // Execute call from the randomly generated sequence and commit state changes.
+                let call_result = executor
+                    .call_raw_committing(
+                        tx.sender,
+                        tx.call_details.target,
+                        tx.call_details.calldata.clone(),
+                        U256::ZERO,
+                    )
+                    .map_err(|e| {
+                        TestCaseError::fail(format!("Could not make raw evm call: {}", e))
+                    })?;
 
                 if call_result.result.as_ref() == MAGIC_ASSUME {
                     inputs.pop();
@@ -236,10 +233,18 @@ impl<'a> InvariantExecutor<'a> {
                     }
                 } else {
                     // Collect data for fuzzing from the state changeset.
-                    let mut state_changeset =
-                        call_result.state_changeset.to_owned().expect("no changesets");
+                    let mut state_changeset = call_result.state_changeset.to_owned().unwrap();
 
-                    collect_data(&mut state_changeset, sender, &call_result, &fuzz_state);
+                    if !&call_result.reverted {
+                        collect_data(
+                            &mut state_changeset,
+                            &targeted_contracts,
+                            tx,
+                            &call_result,
+                            &fuzz_state,
+                            self.config.depth,
+                        );
+                    }
 
                     // Collect created contracts and add to fuzz targets only if targeted contracts
                     // are updatable.
@@ -255,11 +260,9 @@ impl<'a> InvariantExecutor<'a> {
                             warn!(target: "forge::test", "{error}");
                         }
                     }
-                    // Commit changes to the database.
-                    executor.backend.commit(state_changeset.clone());
 
                     fuzz_runs.push(FuzzCase {
-                        calldata: calldata.clone(),
+                        calldata: tx.call_details.calldata.clone(),
                         gas: call_result.gas_used,
                         stipend: call_result.stipend,
                     });
@@ -347,8 +350,7 @@ impl<'a> InvariantExecutor<'a> {
             self.select_contracts_and_senders(invariant_contract.address)?;
 
         // Stores fuzz state for use with [fuzz_calldata_from_state].
-        let fuzz_state: EvmFuzzState =
-            build_initial_state(self.executor.backend.mem_db(), self.config.dictionary);
+        let fuzz_state = EvmFuzzState::new(self.executor.backend.mem_db(), self.config.dictionary);
 
         // Creates the invariant strategy.
         let strat = invariant_strat(
@@ -655,13 +657,16 @@ impl<'a> InvariantExecutor<'a> {
 /// randomly generated addresses.
 fn collect_data(
     state_changeset: &mut HashMap<Address, revm::primitives::Account>,
-    sender: &Address,
+    fuzzed_contracts: &FuzzRunIdentifiedContracts,
+    tx: &BasicTxDetails,
     call_result: &RawCallResult,
     fuzz_state: &EvmFuzzState,
+    run_depth: u32,
 ) {
     // Verify it has no code.
     let mut has_code = false;
-    if let Some(Some(code)) = state_changeset.get(sender).map(|account| account.info.code.as_ref())
+    if let Some(Some(code)) =
+        state_changeset.get(&tx.sender).map(|account| account.info.code.as_ref())
     {
         has_code = !code.is_empty();
     }
@@ -669,13 +674,22 @@ fn collect_data(
     // We keep the nonce changes to apply later.
     let mut sender_changeset = None;
     if !has_code {
-        sender_changeset = state_changeset.remove(sender);
+        sender_changeset = state_changeset.remove(&tx.sender);
     }
 
-    fuzz_state.collect_state_from_call(&call_result.logs, &*state_changeset);
+    // Collect values from fuzzed call result and add them to fuzz dictionary.
+    let (fuzzed_contract_abi, fuzzed_function) = fuzzed_contracts.fuzzed_artifacts(tx);
+    fuzz_state.collect_values_from_call(
+        fuzzed_contract_abi.as_ref(),
+        fuzzed_function.as_ref(),
+        &call_result.result,
+        &call_result.logs,
+        &*state_changeset,
+        run_depth,
+    );
 
     // Re-add changes
     if let Some(changed) = sender_changeset {
-        state_changeset.insert(*sender, changed);
+        state_changeset.insert(tx.sender, changed);
     }
 }

@@ -68,6 +68,10 @@ async fn main() -> Result<()> {
             let value = stdin::unwrap(hexdata, false)?;
             println!("{}", SimpleCast::to_ascii(&value)?);
         }
+        CastSubcommand::ToUtf8 { hexdata } => {
+            let value = stdin::unwrap(hexdata, false)?;
+            println!("{}", SimpleCast::to_utf8(&value)?);
+        }
         CastSubcommand::FromFixedPoint { value, decimals } => {
             let (value, decimals) = stdin::unwrap2(value, decimals)?;
             println!("{}", SimpleCast::from_fixed_point(&value, &decimals)?);
@@ -347,7 +351,8 @@ async fn main() -> Result<()> {
             let provider = utils::get_provider(&config)?;
             let address = address.resolve(&provider).await?;
             let value = provider
-                .get_proof(address, slots.into_iter().collect(), block.unwrap_or(BlockId::latest()))
+                .get_proof(address, slots.into_iter().collect())
+                .block_id(block.unwrap_or_default())
                 .await?;
             println!("{}", serde_json::to_string(&value)?);
         }

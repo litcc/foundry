@@ -11,7 +11,7 @@ mod calldata;
 pub use calldata::{fuzz_calldata, fuzz_calldata_from_state};
 
 mod state;
-pub use state::{build_initial_state, collect_created_contracts, EvmFuzzState};
+pub use state::{collect_created_contracts, EvmFuzzState};
 
 mod invariants;
 pub use invariants::{fuzz_contract_with_calldata, invariant_strat, override_call_strat};
@@ -19,6 +19,7 @@ pub use invariants::{fuzz_contract_with_calldata, invariant_strat, override_call
 /// Macro to create strategy with fixtures.
 /// 1. A default strategy if no fixture defined for current parameter.
 /// 2. A weighted strategy that use fixtures and default strategy values for current parameter.
+///
 /// If fixture is not of the same type as fuzzed parameter then value is rejected and error raised.
 macro_rules! fixture_strategy {
     ($fixtures:ident, $strategy_value:expr, $default_strategy:expr) => {

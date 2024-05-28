@@ -1,7 +1,7 @@
 use crate::{fork::fork_config, utils::http_provider_with_signer};
 use alloy_network::{EthereumSigner, TransactionBuilder};
 use alloy_primitives::{hex, Address, Bytes, U256};
-use alloy_provider::{debug::DebugApi, Provider};
+use alloy_provider::{ext::DebugApi, Provider};
 use alloy_rpc_types::{BlockNumberOrTag, TransactionRequest, WithOtherFields};
 use alloy_rpc_types_trace::{
     geth::{GethDebugTracingCallOptions, GethTrace},
@@ -66,7 +66,6 @@ async fn test_parity_suicide_trace() {
     let owner = wallets[0].address();
     let destructor = wallets[1].address();
 
-    // deploy successfully
     let contract_addr =
         SuicideContract::deploy_builder(provider.clone()).from(owner).deploy().await.unwrap();
     let contract = SuicideContract::new(contract_addr, provider.clone());

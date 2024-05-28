@@ -5,7 +5,7 @@ use alloy_json_abi::{Function, JsonAbi};
 use alloy_primitives::{Address, Bytes, U256};
 use eyre::Result;
 use foundry_common::{get_contract_name, ContractsByArtifact, TestFunctionExt};
-use foundry_compilers::{artifacts::Libraries, Artifact, ArtifactId, ProjectCompileOutput};
+use foundry_compilers::{artifacts::Libraries, Artifact, ArtifactId, ProjectCompileOutput, Solc};
 use foundry_config::Config;
 use foundry_evm::{
     backend::Backend, decode::RevertDecoder, executors::ExecutorBuilder, fork::CreateFork,
@@ -147,6 +147,7 @@ impl MultiContractRunner {
     ///
     /// Each Executor gets its own instance of the `Backend`.
     pub fn test(&mut self, filter: &dyn TestFilter, tx: mpsc::Sender<(String, SuiteResult)>) {
+        let handle = tokio::runtime::Handle::current();
         trace!("running all tests");
 
         // The DB backend that serves all the data.
@@ -163,7 +164,8 @@ impl MultiContractRunner {
         );
 
         contracts.par_iter().for_each_with(tx, |tx, &(id, contract)| {
-            let result = self.run_tests(id, contract, db.clone(), filter);
+            let _guard = handle.enter();
+            let result = self.run_tests(id, contract, db.clone(), filter, &handle);
             let _ = tx.send((id.identifier(), result));
         })
     }
@@ -174,12 +176,15 @@ impl MultiContractRunner {
         contract: &TestContract,
         db: Backend,
         filter: &dyn TestFilter,
+        handle: &tokio::runtime::Handle,
     ) -> SuiteResult {
         let identifier = artifact_id.identifier();
         let mut span_name = identifier.as_str();
 
-        let linker =
-            Linker::new(self.config.project_paths().root, self.output.artifact_ids().collect());
+        let linker = Linker::new(
+            self.config.project_paths::<Solc>().root,
+            self.output.artifact_ids().collect(),
+        );
         let linked_contracts = linker.get_linked_artifacts(&contract.libraries).unwrap_or_default();
         let known_contracts = Arc::new(ContractsByArtifact::new(linked_contracts));
 
@@ -220,7 +225,7 @@ impl MultiContractRunner {
             &self.revert_decoder,
             self.debug,
         );
-        let r = runner.run_tests(filter, &self.test_options, known_contracts);
+        let r = runner.run_tests(filter, &self.test_options, known_contracts, handle);
 
         debug!(duration=?r.duration, "executed all tests in contract");
 

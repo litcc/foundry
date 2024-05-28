@@ -2,22 +2,22 @@
 
 use crate::eth::transaction::optimism::{DepositTransaction, DepositTransactionRequest};
 use alloy_consensus::{
-    AnyReceiptEnvelope, BlobTransactionSidecar, Receipt, ReceiptEnvelope, ReceiptWithBloom, Signed,
-    TxEip1559, TxEip2930, TxEip4844, TxEip4844Variant, TxEip4844WithSidecar, TxEnvelope, TxLegacy,
-    TxReceipt,
+    transaction::eip4844::{TxEip4844, TxEip4844Variant, TxEip4844WithSidecar},
+    AnyReceiptEnvelope, Receipt, ReceiptEnvelope, ReceiptWithBloom, Signed, TxEip1559, TxEip2930,
+    TxEnvelope, TxLegacy, TxReceipt,
 };
 use alloy_eips::eip2718::{Decodable2718, Encodable2718};
 use alloy_primitives::{Address, Bloom, Bytes, Log, Signature, TxHash, TxKind, B256, U256};
 use alloy_rlp::{length_of_length, Decodable, Encodable, Header};
 use alloy_rpc_types::{
-    request::TransactionRequest, AccessList, AnyTransactionReceipt, Signature as RpcSignature,
-    Transaction as RpcTransaction, TransactionReceipt, WithOtherFields,
+    other::OtherFields, request::TransactionRequest, AccessList, AnyTransactionReceipt,
+    Signature as RpcSignature, Transaction as RpcTransaction, TransactionReceipt, WithOtherFields,
 };
 use bytes::BufMut;
 use foundry_evm::traces::CallTraceNode;
 use revm::{
     interpreter::InstructionResult,
-    primitives::{CreateScheme, OptimismFields, TransactTo, TxEnv},
+    primitives::{OptimismFields, TransactTo, TxEnv},
 };
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, Mul};
@@ -59,7 +59,7 @@ pub fn transaction_request_to_typed(
     } = tx;
 
     // Special case: OP-stack deposit tx
-    if transaction_type == Some(126) {
+    if transaction_type == Some(0x7E) || has_optimism_fields(&other) {
         return Some(TypedTransactionRequest::Deposit(DepositTransactionRequest {
             from: from.unwrap_or_default(),
             source_hash: other.get_deserialized::<B256>("sourceHash")?.ok()?,
@@ -146,29 +146,18 @@ pub fn transaction_request_to_typed(
                 access_list: access_list.unwrap_or_default(),
                 blob_versioned_hashes: blob_versioned_hashes.unwrap_or_default(),
             };
-            let blob_sidecar = BlobTransactionSidecar {
-                blobs: sidecar
-                    .blobs
-                    .into_iter()
-                    .map(|b| c_kzg::Blob::from_bytes(b.as_slice()).unwrap())
-                    .collect(),
-                commitments: sidecar
-                    .commitments
-                    .into_iter()
-                    .map(|c| c_kzg::Bytes48::from_bytes(c.as_slice()).unwrap())
-                    .collect(),
-                proofs: sidecar
-                    .proofs
-                    .into_iter()
-                    .map(|p| c_kzg::Bytes48::from_bytes(p.as_slice()).unwrap())
-                    .collect(),
-            };
             Some(TypedTransactionRequest::EIP4844(TxEip4844Variant::TxEip4844WithSidecar(
-                TxEip4844WithSidecar::from_tx_and_sidecar(tx, blob_sidecar),
+                TxEip4844WithSidecar::from_tx_and_sidecar(tx, sidecar),
             )))
         }
         _ => None,
     }
+}
+
+fn has_optimism_fields(other: &OtherFields) -> bool {
+    other.contains_key("sourceHash") &&
+        other.contains_key("mint") &&
+        other.contains_key("isSystemTx")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -459,7 +448,7 @@ impl PendingTransaction {
         fn transact_to(kind: &TxKind) -> TransactTo {
             match kind {
                 TxKind::Call(c) => TransactTo::Call(*c),
-                TxKind::Create => TransactTo::Create(CreateScheme::Create),
+                TxKind::Create => TransactTo::Create,
             }
         }
 
@@ -629,7 +618,7 @@ impl TypedTransaction {
             TypedTransaction::Legacy(tx) => tx.tx().gas_price,
             TypedTransaction::EIP2930(tx) => tx.tx().gas_price,
             TypedTransaction::EIP1559(tx) => tx.tx().max_fee_per_gas,
-            TypedTransaction::EIP4844(tx) => tx.tx().tx().max_fee_per_blob_gas,
+            TypedTransaction::EIP4844(tx) => tx.tx().tx().max_fee_per_gas,
             TypedTransaction::Deposit(_) => 0,
         }
     }

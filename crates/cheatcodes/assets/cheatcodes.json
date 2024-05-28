@@ -475,7 +475,7 @@
         {
           "name": "gasMemoryUsed",
           "ty": "uint64",
-          "description": "The amount of gas used for memory expansion."
+          "description": "DEPRECATED: The amount of gas used for memory expansion. Ref: <https://github.com/foundry-rs/foundry/pull/7934#pullrequestreview-2069236939>"
         },
         {
           "name": "gasRefunded",
@@ -3670,6 +3670,26 @@
       "group": "evm",
       "status": "stable",
       "safety": "unsafe"
+    },
+    {
+      "func": {
+        "id": "ensNamehash",
+        "description": "Returns ENS namehash for provided string.",
+        "declaration": "function ensNamehash(string calldata name) external pure returns (bytes32);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "ensNamehash(string)",
+        "selector": "0x8c374c65",
+        "selectorBytes": [
+          140,
+          55,
+          76,
+          101
+        ]
+      },
+      "group": "utilities",
+      "status": "stable",
+      "safety": "safe"
     },
     {
       "func": {
