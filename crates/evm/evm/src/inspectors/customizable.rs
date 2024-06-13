@@ -181,51 +181,23 @@ impl Default for Customizable {
 
 impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
     fn initialize_interp(&mut self, interp: &mut Interpreter, context: &mut EvmContext<DB>) {
-        let evm_context = InnerEvmContextWrap {
-            env: &mut context.inner.env,
-            journaled_state: &mut context.inner.journaled_state,
-            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut data.l1_block_info,
-        };
+        let evm_context = Self::inner_evm_context(context);
 
         self.inspector.initialize_interp(interp, evm_context);
     }
 
     fn step(&mut self, interp: &mut Interpreter, context: &mut EvmContext<DB>) {
-        let evm_context = InnerEvmContextWrap {
-            env: &mut context.inner.env,
-            journaled_state: &mut context.inner.journaled_state,
-            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut data.l1_block_info,
-        };
+        let evm_context = Self::inner_evm_context(context);
         self.inspector.step(interp, evm_context)
     }
 
     fn step_end(&mut self, interp: &mut Interpreter, context: &mut EvmContext<DB>) {
-        let evm_context = InnerEvmContextWrap {
-            env: &mut context.inner.env,
-            journaled_state: &mut context.inner.journaled_state,
-            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut data.l1_block_info,
-        };
+        let evm_context = Self::inner_evm_context(context);
         self.inspector.step_end(interp, evm_context)
     }
 
     fn log(&mut self, context: &mut EvmContext<DB>, log: &Log) {
-        let evm_context = InnerEvmContextWrap {
-            env: &mut context.inner.env,
-            journaled_state: &mut context.inner.journaled_state,
-            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut data.l1_block_info,
-        };
+        let evm_context = Self::inner_evm_context(context);
         self.inspector.log(evm_context, log)
     }
 
@@ -234,14 +206,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         context: &mut EvmContext<DB>,
         inputs: &mut CallInputs,
     ) -> Option<CallOutcome> {
-        let evm_context = InnerEvmContextWrap {
-            env: &mut context.inner.env,
-            journaled_state: &mut context.inner.journaled_state,
-            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut data.l1_block_info,
-        };
+        let evm_context = Self::inner_evm_context(context);
         self.inspector.call(evm_context, inputs);
 
         None
@@ -253,14 +218,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         inputs: &CallInputs,
         outcome: CallOutcome,
     ) -> CallOutcome {
-        let evm_context = InnerEvmContextWrap {
-            env: &mut context.inner.env,
-            journaled_state: &mut context.inner.journaled_state,
-            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut data.l1_block_info,
-        };
+        let evm_context = Self::inner_evm_context(context);
         self.inspector.call_end(evm_context, inputs, &outcome);
         outcome
     }
@@ -270,14 +228,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         context: &mut EvmContext<DB>,
         inputs: &mut CreateInputs,
     ) -> Option<CreateOutcome> {
-        let evm_context = InnerEvmContextWrap {
-            env: &mut context.inner.env,
-            journaled_state: &mut context.inner.journaled_state,
-            db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
-            error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
-            l1_block_info: &mut data.l1_block_info,
-        };
+        let evm_context = Self::inner_evm_context(context);
         self.inspector.create(evm_context, inputs);
 
         None
@@ -289,6 +240,20 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         inputs: &CreateInputs,
         outcome: CreateOutcome,
     ) -> CreateOutcome {
+        let evm_context = Self::inner_evm_context(context);
+        self.inspector.create_end(evm_context, inputs, &outcome);
+        outcome
+    }
+
+    fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
+        self.inspector.selfdestruct(contract, target, value);
+    }
+}
+
+impl Customizable {
+    fn inner_evm_context<DB: Database<Error = DatabaseError>>(
+        context: &mut EvmContext<DB>,
+    ) -> InnerEvmContextWrap<'_, '_> {
         let evm_context = InnerEvmContextWrap {
             env: &mut context.inner.env,
             journaled_state: &mut context.inner.journaled_state,
@@ -297,11 +262,6 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
             #[cfg(feature = "optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
-        self.inspector.create_end(evm_context, inputs, &outcome);
-        outcome
-    }
-
-    fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        self.inspector.selfdestruct(contract, target, value);
+        evm_context
     }
 }
