@@ -16,9 +16,10 @@ use foundry_common::{
 };
 use foundry_compilers::{
     artifacts::{BytecodeObject, Libraries},
+    compilers::{multi::MultiCompilerLanguage, Language},
     info::ContractInfo,
     utils::source_files_iter,
-    ArtifactId, ProjectCompileOutput, SOLC_EXTENSIONS,
+    ArtifactId, ProjectCompileOutput,
 };
 use foundry_evm::constants::DEFAULT_CREATE2_DEPLOYER;
 use foundry_linking::Linker;
@@ -27,16 +28,16 @@ use std::{path::PathBuf, str::FromStr, sync::Arc};
 /// Container for the compiled contracts.
 #[derive(Debug)]
 pub struct BuildData {
-    /// Root of the project
+    /// Root of the project.
     pub project_root: PathBuf,
-    /// Linker which can be used to link contracts, owns [ArtifactContracts] map.
+    /// The compiler output.
     pub output: ProjectCompileOutput,
-    /// Id of target contract artifact.
+    /// ID of target contract artifact.
     pub target: ArtifactId,
 }
 
 impl BuildData {
-    pub fn get_linker(&self) -> Linker {
+    pub fn get_linker(&self) -> Linker<'_> {
         Linker::new(self.project_root.clone(), self.output.artifact_ids().collect())
     }
 
@@ -81,7 +82,7 @@ impl BuildData {
                 known_libraries,
                 script_config.evm_opts.sender,
                 script_config.sender_nonce,
-                &self.target,
+                [&self.target],
             )?;
 
             (output.libraries, ScriptPredeployLibraries::Default(output.libs_to_deploy))
@@ -135,8 +136,7 @@ impl LinkedBuildData {
     ) -> Result<Self> {
         let sources = ContractSources::from_project_output(
             &build_data.output,
-            &build_data.project_root,
-            &libraries,
+            Some((&build_data.project_root, &libraries)),
         )?;
 
         let known_contracts =
@@ -146,10 +146,9 @@ impl LinkedBuildData {
     }
 
     /// Fetches target bytecode from linked contracts.
-    pub fn get_target_contract(&self) -> Result<ContractData> {
+    pub fn get_target_contract(&self) -> Result<&ContractData> {
         self.known_contracts
             .get(&self.build_data.target)
-            .cloned()
             .ok_or_eyre("target not found in linked artifacts")
     }
 }
@@ -185,9 +184,11 @@ impl PreprocessedState {
             }
         };
 
-        let sources_to_compile =
-            source_files_iter(project.paths.sources.as_path(), SOLC_EXTENSIONS)
-                .chain([target_path.to_path_buf()]);
+        let sources_to_compile = source_files_iter(
+            project.paths.sources.as_path(),
+            MultiCompilerLanguage::FILE_EXTENSIONS,
+        )
+        .chain([target_path.to_path_buf()]);
 
         let output = ProjectCompiler::new()
             .quiet_if(args.opts.silent)

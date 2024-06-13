@@ -209,7 +209,7 @@ blobGasUsed             {}",
             serde_json::to_string(&logs).unwrap(),
             logs_bloom.pretty(),
             state_root.pretty(),
-            pretty_status(*status),
+            pretty_status(status.coerce_status()),
             transaction_hash.pretty(),
             transaction_index.pretty(),
             transaction_type,
@@ -223,7 +223,7 @@ blobGasUsed             {}",
 
         // additional captured fields
         for (key, val) in other.iter() {
-            pretty.push_str(&format!("\n{}             {}", key, val));
+            pretty.push_str(&format!("\n{key}             {val}"));
         }
 
         pretty
@@ -271,9 +271,9 @@ transactions:        {}",
 impl UIfmt for BlockTransactions {
     fn pretty(&self) -> String {
         match self {
-            BlockTransactions::Hashes(hashes) => hashes.pretty(),
-            BlockTransactions::Full(transactions) => transactions.pretty(),
-            BlockTransactions::Uncle => String::new(),
+            Self::Hashes(hashes) => hashes.pretty(),
+            Self::Full(transactions) => transactions.pretty(),
+            Self::Uncle => String::new(),
         }
     }
 }
@@ -369,11 +369,11 @@ impl From<serde_json::Value> for EthValue {
 impl UIfmt for EthValue {
     fn pretty(&self) -> String {
         match self {
-            EthValue::U64(num) => num.pretty(),
-            EthValue::U256(num) => num.pretty(),
-            EthValue::U64Array(arr) => arr.pretty(),
-            EthValue::U256Array(arr) => arr.pretty(),
-            EthValue::Other(val) => val.to_string().trim_matches('"').to_string(),
+            Self::U64(num) => num.pretty(),
+            Self::U256(num) => num.pretty(),
+            Self::U64Array(arr) => arr.pretty(),
+            Self::U256Array(arr) => arr.pretty(),
+            Self::Other(val) => val.to_string().trim_matches('"').to_string(),
         }
     }
 }
@@ -424,7 +424,7 @@ pub fn get_pretty_tx_receipt_attr(
         "logsBloom" | "logs_bloom" => Some(receipt.receipt.inner.inner.inner.logs_bloom.pretty()),
         "root" | "stateRoot" | "state_root " => Some(receipt.receipt.state_root.pretty()),
         "status" | "statusCode" | "status_code" => {
-            Some(pretty_status(receipt.receipt.inner.inner.inner.receipt.status))
+            Some(pretty_status(receipt.receipt.inner.inner.inner.receipt.status.coerce_status()))
         }
         "transactionHash" | "transaction_hash" => Some(receipt.receipt.transaction_hash.pretty()),
         "transactionIndex" | "transaction_index" => {

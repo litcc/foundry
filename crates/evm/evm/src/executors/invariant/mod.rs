@@ -2,13 +2,15 @@ use crate::{
     executors::{Executor, RawCallResult},
     inspectors::Fuzzer,
 };
-use alloy_primitives::{Address, FixedBytes, U256};
+use alloy_primitives::{Address, FixedBytes, Selector, U256};
 use alloy_sol_types::{sol, SolCall};
 use eyre::{eyre, ContextCompat, Result};
 use foundry_common::contracts::{ContractsByAddress, ContractsByArtifact};
 use foundry_config::InvariantConfig;
 use foundry_evm_core::{
-    constants::{CALLER, CHEATCODE_ADDRESS, HARDHAT_CONSOLE_ADDRESS, MAGIC_ASSUME},
+    constants::{
+        CALLER, CHEATCODE_ADDRESS, DEFAULT_CREATE2_DEPLOYER, HARDHAT_CONSOLE_ADDRESS, MAGIC_ASSUME,
+    },
     utils::get_function,
 };
 use foundry_evm_fuzz::{
@@ -20,9 +22,10 @@ use foundry_evm_fuzz::{
     FuzzCase, FuzzFixtures, FuzzedCases,
 };
 use foundry_evm_traces::CallTraceArena;
+use indicatif::ProgressBar;
 use parking_lot::RwLock;
 use proptest::{
-    strategy::{BoxedStrategy, Strategy},
+    strategy::{Strategy, ValueTree},
     test_runner::{TestCaseError, TestRunner},
 };
 use result::{assert_invariants, can_continue};
@@ -91,10 +94,6 @@ sol! {
     }
 }
 
-/// Alias for (Dictionary for fuzzing, initial contracts to fuzz and an InvariantStrategy).
-type InvariantPreparation =
-    (EvmFuzzState, FuzzRunIdentifiedContracts, BoxedStrategy<BasicTxDetails>);
-
 /// Wrapper around any [`Executor`] implementor which provides fuzzing support using [`proptest`].
 ///
 /// After instantiation, calling `fuzz` will proceed to hammer the deployed smart contracts with
@@ -139,6 +138,7 @@ impl<'a> InvariantExecutor<'a> {
         &mut self,
         invariant_contract: InvariantContract<'_>,
         fuzz_fixtures: &FuzzFixtures,
+        progress: Option<&ProgressBar>,
     ) -> Result<InvariantFuzzTestResult> {
         // Throw an error to abort test run if the invariant function accepts input params
         if !invariant_contract.invariant_function.inputs.is_empty() {
@@ -219,7 +219,7 @@ impl<'a> InvariantExecutor<'a> {
                         U256::ZERO,
                     )
                     .map_err(|e| {
-                        TestCaseError::fail(format!("Could not make raw evm call: {}", e))
+                        TestCaseError::fail(format!("Could not make raw evm call: {e}"))
                     })?;
 
                 if call_result.result.as_ref() == MAGIC_ASSUME {
@@ -235,7 +235,7 @@ impl<'a> InvariantExecutor<'a> {
                     // Collect data for fuzzing from the state changeset.
                     let mut state_changeset = call_result.state_changeset.to_owned().unwrap();
 
-                    if !&call_result.reverted {
+                    if !call_result.reverted {
                         collect_data(
                             &mut state_changeset,
                             &targeted_contracts,
@@ -318,11 +318,16 @@ impl<'a> InvariantExecutor<'a> {
             // Revert state to not persist values between runs.
             fuzz_state.revert();
 
+            // If running with progress then increment completed runs.
+            if let Some(progress) = progress {
+                progress.inc(1);
+            }
+
             Ok(())
         });
 
-        trace!(target: "forge::test::invariant::fuzz_fixtures", "{:?}", fuzz_fixtures);
-        trace!(target: "forge::test::invariant::dictionary", "{:?}", fuzz_state.dictionary_read().values().iter().map(hex::encode).collect::<Vec<_>>());
+        trace!(?fuzz_fixtures);
+        fuzz_state.log_stats();
 
         let (reverts, error) = failures.into_inner().into_inner();
 
@@ -343,7 +348,8 @@ impl<'a> InvariantExecutor<'a> {
         &mut self,
         invariant_contract: &InvariantContract<'_>,
         fuzz_fixtures: &FuzzFixtures,
-    ) -> Result<InvariantPreparation> {
+    ) -> Result<(EvmFuzzState, FuzzRunIdentifiedContracts, impl Strategy<Value = BasicTxDetails>)>
+    {
         // Finds out the chosen deployed contracts and/or senders.
         self.select_contract_artifacts(invariant_contract.address)?;
         let (targeted_senders, targeted_contracts) =
@@ -360,8 +366,7 @@ impl<'a> InvariantExecutor<'a> {
             self.config.dictionary.dictionary_weight,
             fuzz_fixtures.clone(),
         )
-        .no_shrink()
-        .boxed();
+        .no_shrink();
 
         // Allows `override_call_strat` to use the address given by the Fuzzer inspector during
         // EVM execution.
@@ -489,8 +494,16 @@ impl<'a> InvariantExecutor<'a> {
     ) -> Result<(SenderFilters, FuzzRunIdentifiedContracts)> {
         let targeted_senders =
             self.call_sol_default(to, &IInvariantTest::targetSendersCall {}).targetedSenders;
-        let excluded_senders =
+        let mut excluded_senders =
             self.call_sol_default(to, &IInvariantTest::excludeSendersCall {}).excludedSenders;
+        // Extend with default excluded addresses - https://github.com/foundry-rs/foundry/issues/4163
+        excluded_senders.extend([
+            CHEATCODE_ADDRESS,
+            HARDHAT_CONSOLE_ADDRESS,
+            DEFAULT_CREATE2_DEPLOYER,
+        ]);
+        let sender_filters = SenderFilters::new(targeted_senders, excluded_senders);
+
         let selected =
             self.call_sol_default(to, &IInvariantTest::targetContractsCall {}).targetedContracts;
         let excluded =
@@ -498,20 +511,16 @@ impl<'a> InvariantExecutor<'a> {
 
         let mut contracts: TargetedContracts = self
             .setup_contracts
-            .clone()
-            .into_iter()
-            .filter(|(addr, (identifier, _))| {
+            .iter()
+            .filter(|&(addr, (identifier, _))| {
                 *addr != to &&
                     *addr != CHEATCODE_ADDRESS &&
                     *addr != HARDHAT_CONSOLE_ADDRESS &&
                     (selected.is_empty() || selected.contains(addr)) &&
-                    (self.artifact_filters.targeted.is_empty() ||
-                        self.artifact_filters.targeted.contains_key(identifier)) &&
                     (excluded.is_empty() || !excluded.contains(addr)) &&
-                    (self.artifact_filters.excluded.is_empty() ||
-                        !self.artifact_filters.excluded.contains(identifier))
+                    self.artifact_filters.matches(identifier)
             })
-            .map(|(addr, (identifier, abi))| (addr, (identifier, abi, vec![])))
+            .map(|(addr, (identifier, abi))| (*addr, (identifier.clone(), abi.clone(), vec![])))
             .collect();
 
         self.target_interfaces(to, &mut contracts)?;
@@ -523,10 +532,7 @@ impl<'a> InvariantExecutor<'a> {
             eyre::bail!("No contracts to fuzz.");
         }
 
-        Ok((
-            SenderFilters::new(targeted_senders, excluded_senders),
-            FuzzRunIdentifiedContracts::new(contracts, selected.is_empty()),
-        ))
+        Ok((sender_filters, FuzzRunIdentifiedContracts::new(contracts, selected.is_empty())))
     }
 
     /// Extends the contracts and selectors to fuzz with the addresses and ABIs specified in
@@ -586,26 +592,18 @@ impl<'a> InvariantExecutor<'a> {
         address: Address,
         targeted_contracts: &mut TargetedContracts,
     ) -> Result<()> {
-        let some_abi_selectors = self
-            .artifact_filters
-            .targeted
-            .iter()
-            .filter(|(_, selectors)| !selectors.is_empty())
-            .collect::<BTreeMap<_, _>>();
-
         for (address, (identifier, _)) in self.setup_contracts.iter() {
-            if let Some(selectors) = some_abi_selectors.get(identifier) {
-                self.add_address_with_functions(
-                    *address,
-                    (*selectors).clone(),
-                    targeted_contracts,
-                )?;
+            if let Some(selectors) = self.artifact_filters.targeted.get(identifier) {
+                if selectors.is_empty() {
+                    continue;
+                }
+                self.add_address_with_functions(*address, selectors, targeted_contracts)?;
             }
         }
 
         let selectors = self.call_sol_default(address, &IInvariantTest::targetSelectorsCall {});
         for IInvariantTest::FuzzSelector { addr, selectors } in selectors.targetedSelectors {
-            self.add_address_with_functions(addr, selectors, targeted_contracts)?;
+            self.add_address_with_functions(addr, &selectors, targeted_contracts)?;
         }
         Ok(())
     }
@@ -614,14 +612,14 @@ impl<'a> InvariantExecutor<'a> {
     fn add_address_with_functions(
         &self,
         address: Address,
-        bytes4_array: Vec<FixedBytes<4>>,
+        selectors: &[Selector],
         targeted_contracts: &mut TargetedContracts,
     ) -> eyre::Result<()> {
         if let Some((name, abi, address_selectors)) = targeted_contracts.get_mut(&address) {
             // The contract is already part of our filter, and all we do is specify that we're
             // only looking at specific functions coming from `bytes4_array`.
-            for selector in bytes4_array {
-                address_selectors.push(get_function(name, &selector, abi)?);
+            for &selector in selectors {
+                address_selectors.push(get_function(name, selector, abi).cloned()?);
             }
         } else {
             let (name, abi) = self.setup_contracts.get(&address).ok_or_else(|| {
@@ -630,9 +628,9 @@ impl<'a> InvariantExecutor<'a> {
                 )
             })?;
 
-            let functions = bytes4_array
-                .into_iter()
-                .map(|selector| get_function(name, &selector, abi))
+            let functions = selectors
+                .iter()
+                .map(|&selector| get_function(name, selector, abi).cloned())
                 .collect::<Result<Vec<_>, _>>()?;
 
             targeted_contracts.insert(address, (name.to_string(), abi.clone(), functions));
@@ -678,10 +676,9 @@ fn collect_data(
     }
 
     // Collect values from fuzzed call result and add them to fuzz dictionary.
-    let (fuzzed_contract_abi, fuzzed_function) = fuzzed_contracts.fuzzed_artifacts(tx);
     fuzz_state.collect_values_from_call(
-        fuzzed_contract_abi.as_ref(),
-        fuzzed_function.as_ref(),
+        fuzzed_contracts,
+        tx,
         &call_result.result,
         &call_result.logs,
         &*state_changeset,

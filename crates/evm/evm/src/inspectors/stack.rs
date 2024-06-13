@@ -143,8 +143,6 @@ impl InspectorStackBuilder {
     }
 
     /// Builds the stack of inspectors to use when transacting/committing on the EVM.
-    ///
-    /// See also [`revm::Evm::inspect_ref`] and [`revm::Evm::commit_ref`].
     pub fn build(self) -> InspectorStack {
         let Self {
             block,
@@ -261,7 +259,7 @@ pub struct InspectorData {
 /// Used to adjust EVM state while in inner context.
 ///
 /// We need this to avoid breaking changes due to EVM behavior differences in isolated vs
-/// non-isolated mode. For descriptions and workarounds for those changes see: https://github.com/foundry-rs/foundry/pull/7186#issuecomment-1959102195
+/// non-isolated mode. For descriptions and workarounds for those changes see: <https://github.com/foundry-rs/foundry/pull/7186#issuecomment-1959102195>
 #[derive(Debug, Clone)]
 pub struct InnerContextData {
     /// The sender of the inner EVM context.
@@ -402,9 +400,7 @@ impl InspectorStack {
             labels: self
                 .cheatcodes
                 .as_ref()
-                .map(|cheatcodes| {
-                    cheatcodes.labels.clone().into_iter().map(|l| (l.0, l.1)).collect()
-                })
+                .map(|cheatcodes| cheatcodes.labels.clone())
                 .unwrap_or_default(),
             traces: self.tracer.map(|tracer| tracer.get_traces().clone()),
             debug: self.debugger.map(|debugger| debugger.arena),
@@ -524,7 +520,7 @@ impl InspectorStack {
         ecx.db.commit(res.state.clone());
 
         // Update both states with new DB data after commit.
-        if let Err(e) = update_state(&mut ecx.journaled_state.state, &mut ecx.db) {
+        if let Err(e) = update_state(&mut ecx.journaled_state.state, &mut ecx.db, None) {
             let res = InterpreterResult {
                 result: InstructionResult::Revert,
                 output: Bytes::from(e.to_string()),
@@ -532,7 +528,7 @@ impl InspectorStack {
             };
             return (res, None)
         }
-        if let Err(e) = update_state(&mut res.state, &mut ecx.db) {
+        if let Err(e) = update_state(&mut res.state, &mut ecx.db, None) {
             let res = InterpreterResult {
                 result: InstructionResult::Revert,
                 output: Bytes::from(e.to_string()),

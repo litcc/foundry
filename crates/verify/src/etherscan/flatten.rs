@@ -4,8 +4,12 @@ use eyre::{Context, Result};
 use foundry_block_explorers::verify::CodeFormat;
 use foundry_compilers::{
     artifacts::{BytecodeHash, Source},
-    compilers::{solc::SolcVersionManager, Compiler, CompilerVersionManager},
-    AggregatedCompilerOutput, SolcInput,
+    buildinfo::RawBuildInfo,
+    compilers::{
+        solc::{SolcCompiler, SolcLanguage, SolcVersionedInput},
+        Compiler, CompilerInput,
+    },
+    AggregatedCompilerOutput, Solc,
 };
 use semver::{BuildMetadata, Version};
 use std::{collections::BTreeMap, path::Path};
@@ -18,7 +22,7 @@ impl EtherscanSourceProvider for EtherscanFlattenedSource {
         args: &VerifyArgs,
         context: &VerificationContext,
     ) -> Result<(String, String, CodeFormat)> {
-        let metadata = context.project.settings.metadata.as_ref();
+        let metadata = context.project.settings.solc.metadata.as_ref();
         let bch = metadata.and_then(|m| m.bytecode_hash).unwrap_or_default();
 
         eyre::ensure!(
@@ -27,8 +31,13 @@ impl EtherscanSourceProvider for EtherscanFlattenedSource {
             bch,
         );
 
-        let source =
-            context.project.flatten(&context.target_path).wrap_err("Failed to flatten contract")?;
+        let source = context
+            .project
+            .paths
+            .clone()
+            .with_language::<SolcLanguage>()
+            .flatten(&context.target_path)
+            .wrap_err("Failed to flatten contract")?;
 
         if !args.force {
             // solc dry run of flattened code
@@ -49,7 +58,7 @@ impl EtherscanSourceProvider for EtherscanFlattenedSource {
 impl EtherscanFlattenedSource {
     /// Attempts to compile the flattened content locally with the compiler version.
     ///
-    /// This expects the completely flattened `content´ and will try to compile it using the
+    /// This expects the completely flattened content and will try to compile it using the
     /// provided compiler. If the compiler is missing it will be installed.
     ///
     /// # Errors
@@ -67,20 +76,20 @@ impl EtherscanFlattenedSource {
         version: &Version,
         contract_path: &Path,
     ) -> Result<()> {
-        let vm = SolcVersionManager::default();
         let version = strip_build_meta(version.clone());
-        let solc = vm.get_or_install(&version)?;
+        let solc = Solc::find_or_install(&version)?;
 
-        let input = SolcInput {
-            language: "Solidity".to_string(),
-            sources: BTreeMap::from([("contract.sol".into(), Source::new(content))]),
-            settings: Default::default(),
-        };
+        let input = SolcVersionedInput::build(
+            BTreeMap::from([("contract.sol".into(), Source::new(content))]),
+            Default::default(),
+            SolcLanguage::Solidity,
+            version.clone(),
+        );
 
-        let out = Compiler::compile(&solc, &input)?;
+        let out = SolcCompiler::Specific(solc).compile(&input)?;
         if out.errors.iter().any(|e| e.is_error()) {
-            let mut o = AggregatedCompilerOutput::default();
-            o.extend(version, out);
+            let mut o = AggregatedCompilerOutput::<SolcCompiler>::default();
+            o.extend(version.clone(), RawBuildInfo::new(&input, &out, false)?, out);
             let diags = o.diagnostics(&[], &[], Default::default());
 
             eyre::bail!(

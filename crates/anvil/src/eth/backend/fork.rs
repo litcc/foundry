@@ -2,7 +2,10 @@
 
 use crate::eth::{backend::db::Db, error::BlockchainError};
 use alloy_primitives::{Address, Bytes, StorageValue, B256, U256};
-use alloy_provider::{ext::DebugApi, Provider};
+use alloy_provider::{
+    ext::{DebugApi, TraceApi},
+    Provider,
+};
 use alloy_rpc_types::{
     request::TransactionRequest, AccessListWithGasUsed, Block, BlockId,
     BlockNumberOrTag as BlockNumber, BlockTransactions, EIP1186AccountProofResponse, FeeHistory,
@@ -39,8 +42,6 @@ pub struct ClientFork {
     pub database: Arc<AsyncRwLock<Box<dyn Db>>>,
 }
 
-// === impl ClientFork ===
-
 impl ClientFork {
     /// Creates a new instance of the fork
     pub fn new(config: ClientForkConfig, database: Arc<AsyncRwLock<Box<dyn Db>>>) -> Self {
@@ -74,8 +75,10 @@ impl ClientFork {
         }
 
         let provider = self.provider();
-        let block =
-            provider.get_block(block_number, false).await?.ok_or(BlockchainError::BlockNotFound)?;
+        let block = provider
+            .get_block(block_number, false.into())
+            .await?
+            .ok_or(BlockchainError::BlockNotFound)?;
         let block_hash = block.header.hash.ok_or(BlockchainError::BlockNotFound)?;
         let timestamp = block.header.timestamp;
         let base_fee = block.header.base_fee_per_gas;
@@ -185,7 +188,7 @@ impl ClientFork {
         block: Option<BlockNumber>,
     ) -> Result<u128, TransportError> {
         let block = block.unwrap_or_default();
-        let res = self.provider().estimate_gas(request).block_id(block.into()).await?;
+        let res = self.provider().estimate_gas(request).block(block.into()).await?;
 
         Ok(res)
     }
@@ -481,7 +484,7 @@ impl ClientFork {
         &self,
         block_id: impl Into<BlockId>,
     ) -> Result<Option<Block>, TransportError> {
-        if let Some(block) = self.provider().get_block(block_id.into(), true).await? {
+        if let Some(block) = self.provider().get_block(block_id.into(), true.into()).await? {
             let hash = block.header.hash.unwrap();
             let block_number = block.header.number.unwrap();
             let mut storage = self.storage_write();
@@ -599,8 +602,6 @@ pub struct ClientForkConfig {
     pub total_difficulty: U256,
 }
 
-// === impl ClientForkConfig ===
-
 impl ClientForkConfig {
     /// Updates the provider URL
     ///
@@ -658,8 +659,6 @@ pub struct ForkedStorage {
     pub block_receipts: HashMap<u64, Vec<ReceiptResponse>>,
     pub code_at: HashMap<(Address, u64), Bytes>,
 }
-
-// === impl ForkedStorage ===
 
 impl ForkedStorage {
     /// Clears all data

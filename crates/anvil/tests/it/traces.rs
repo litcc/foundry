@@ -1,7 +1,10 @@
 use crate::{fork::fork_config, utils::http_provider_with_signer};
 use alloy_network::{EthereumSigner, TransactionBuilder};
 use alloy_primitives::{hex, Address, Bytes, U256};
-use alloy_provider::{ext::DebugApi, Provider};
+use alloy_provider::{
+    ext::{DebugApi, TraceApi},
+    Provider,
+};
 use alloy_rpc_types::{BlockNumberOrTag, TransactionRequest, WithOtherFields};
 use alloy_rpc_types_trace::{
     geth::{GethDebugTracingCallOptions, GethTrace},
@@ -350,7 +353,7 @@ async fn test_trace_address_fork2() {
     api.anvil_impersonate_account(from).await.unwrap();
 
     let tx = provider.send_transaction(tx).await.unwrap().get_receipt().await.unwrap();
-    let status = tx.inner.inner.inner.receipt.status;
+    let status = tx.inner.inner.inner.receipt.status.coerce_status();
     assert!(status);
 
     let traces = provider.trace_transaction(tx.transaction_hash).await.unwrap();

@@ -110,7 +110,7 @@ pub enum SolidityErrorCode {
     ContractExceeds24576Bytes,
     /// Warning after shanghai if init code size exceeds 49152 bytes
     ContractInitCodeSizeExceeds49152Bytes,
-    /// Warning that Function state mutability can be restricted to [view,pure]
+    /// Warning that Function state mutability can be restricted to view/pure.
     FunctionStateMutabilityCanBeRestricted,
     /// Warning: Unused local variable
     UnusedLocalVariable,
@@ -136,11 +136,11 @@ pub enum SolidityErrorCode {
     PragmaSolidity,
     /// Uses transient opcodes
     TransientStorageUsed,
+    /// There are more than 256 warnings. Ignoring the rest.
+    TooManyWarnings,
     /// All other error codes
     Other(u64),
 }
-
-// === impl SolidityErrorCode ===
 
 impl SolidityErrorCode {
     /// The textual identifier for this error
@@ -164,6 +164,7 @@ impl SolidityErrorCode {
             SolidityErrorCode::Unreachable => "unreachable",
             SolidityErrorCode::PragmaSolidity => "pragma-solidity",
             SolidityErrorCode::TransientStorageUsed => "transient-storage",
+            SolidityErrorCode::TooManyWarnings => "too-many-warnings",
             SolidityErrorCode::Other(code) => return Err(*code),
         };
         Ok(s)
@@ -189,6 +190,7 @@ impl From<SolidityErrorCode> for u64 {
             SolidityErrorCode::Unreachable => 5740,
             SolidityErrorCode::PragmaSolidity => 3420,
             SolidityErrorCode::TransientStorageUsed => 2394,
+            SolidityErrorCode::TooManyWarnings => 4591,
             SolidityErrorCode::Other(code) => code,
         }
     }
@@ -224,6 +226,7 @@ impl FromStr for SolidityErrorCode {
             "unreachable" => SolidityErrorCode::Unreachable,
             "pragma-solidity" => SolidityErrorCode::PragmaSolidity,
             "transient-storage" => SolidityErrorCode::TransientStorageUsed,
+            "too-many-warnings" => SolidityErrorCode::TooManyWarnings,
             _ => return Err(format!("Unknown variant {s}")),
         };
 

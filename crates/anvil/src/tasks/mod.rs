@@ -1,5 +1,7 @@
 //! Task management support
 
+#![allow(rustdoc::private_doc_tests)]
+
 use crate::{shutdown::Shutdown, tasks::block_listener::BlockListener, EthApi};
 use alloy_network::AnyNetwork;
 use alloy_primitives::B256;
@@ -21,8 +23,6 @@ pub struct TaskManager {
     /// A receiver for the shutdown signal
     on_shutdown: Shutdown,
 }
-
-// === impl TaskManager ===
 
 impl TaskManager {
     /// Creates a new instance of the task manager
@@ -74,7 +74,7 @@ impl TaskManager {
             let provider = provider.clone();
             let api = api.clone();
             async move {
-                if let Ok(Some(block)) = provider.get_block(hash.into(), false).await {
+                if let Ok(Some(block)) = provider.get_block(hash.into(), false.into()).await {
                     let _ = api
                         .anvil_reset(Some(Forking {
                             json_rpc_url: None,

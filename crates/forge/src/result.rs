@@ -1,10 +1,8 @@
 //! Test outcomes.
 
+use crate::gas_report::GasReport;
 use alloy_primitives::{Address, Log};
-use foundry_common::{
-    evm::Breakpoints, get_contract_name, get_file_name, shell, ContractsByArtifact,
-};
-use foundry_compilers::artifacts::Libraries;
+use foundry_common::{evm::Breakpoints, get_contract_name, get_file_name, shell};
 use foundry_evm::{
     coverage::HitMaps,
     debug::DebugArena,
@@ -16,12 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::{self, Write},
-    sync::Arc,
     time::Duration,
 };
 use yansi::Paint;
-
-use crate::gas_report::GasReport;
 
 /// The aggregated result of a test run.
 #[derive(Clone, Debug)]
@@ -198,11 +193,6 @@ pub struct SuiteResult {
     pub test_results: BTreeMap<String, TestResult>,
     /// Generated warnings.
     pub warnings: Vec<String>,
-    /// Libraries used to link test contract.
-    pub libraries: Libraries,
-    /// Contracts linked with correct libraries.
-    #[serde(skip)]
-    pub known_contracts: Arc<ContractsByArtifact>,
 }
 
 impl SuiteResult {
@@ -210,10 +200,8 @@ impl SuiteResult {
         duration: Duration,
         test_results: BTreeMap<String, TestResult>,
         warnings: Vec<String>,
-        libraries: Libraries,
-        known_contracts: Arc<ContractsByArtifact>,
     ) -> Self {
-        Self { duration, test_results, warnings, libraries, known_contracts }
+        Self { duration, test_results, warnings }
     }
 
     /// Returns an iterator over all individual succeeding tests and their names.
@@ -446,21 +434,21 @@ impl TestResult {
 /// Data report by a test.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TestKindReport {
-    Standard { gas: u64 },
+    Unit { gas: u64 },
     Fuzz { runs: usize, mean_gas: u64, median_gas: u64 },
     Invariant { runs: usize, calls: usize, reverts: usize },
 }
 
 impl fmt::Display for TestKindReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TestKindReport::Standard { gas } => {
+        match *self {
+            Self::Unit { gas } => {
                 write!(f, "(gas: {gas})")
             }
-            TestKindReport::Fuzz { runs, mean_gas, median_gas } => {
+            Self::Fuzz { runs, mean_gas, median_gas } => {
                 write!(f, "(runs: {runs}, μ: {mean_gas}, ~: {median_gas})")
             }
-            TestKindReport::Invariant { runs, calls, reverts } => {
+            Self::Invariant { runs, calls, reverts } => {
                 write!(f, "(runs: {runs}, calls: {calls}, reverts: {reverts})")
             }
         }
@@ -470,12 +458,12 @@ impl fmt::Display for TestKindReport {
 impl TestKindReport {
     /// Returns the main gas value to compare against
     pub fn gas(&self) -> u64 {
-        match self {
-            TestKindReport::Standard { gas } => *gas,
+        match *self {
+            Self::Unit { gas } => gas,
             // We use the median for comparisons
-            TestKindReport::Fuzz { median_gas, .. } => *median_gas,
+            Self::Fuzz { median_gas, .. } => median_gas,
             // We return 0 since it's not applicable
-            TestKindReport::Invariant { .. } => 0,
+            Self::Invariant { .. } => 0,
         }
     }
 }
@@ -483,11 +471,9 @@ impl TestKindReport {
 /// Various types of tests
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TestKind {
-    /// A standard test that consists of calling the defined solidity function
-    ///
-    /// Holds the consumed gas
-    Standard(u64),
-    /// A solidity fuzz test, that stores all test cases
+    /// A unit test.
+    Unit { gas: u64 },
+    /// A fuzz test.
     Fuzz {
         /// we keep this for the debugger
         first_case: FuzzCase,
@@ -495,26 +481,26 @@ pub enum TestKind {
         mean_gas: u64,
         median_gas: u64,
     },
-    /// A solidity invariant test, that stores all test cases
+    /// An invariant test.
     Invariant { runs: usize, calls: usize, reverts: usize },
 }
 
 impl Default for TestKind {
     fn default() -> Self {
-        Self::Standard(0)
+        Self::Unit { gas: 0 }
     }
 }
 
 impl TestKind {
     /// The gas consumed by this test
     pub fn report(&self) -> TestKindReport {
-        match self {
-            TestKind::Standard(gas) => TestKindReport::Standard { gas: *gas },
-            TestKind::Fuzz { runs, mean_gas, median_gas, .. } => {
-                TestKindReport::Fuzz { runs: *runs, mean_gas: *mean_gas, median_gas: *median_gas }
+        match *self {
+            Self::Unit { gas } => TestKindReport::Unit { gas },
+            Self::Fuzz { first_case: _, runs, mean_gas, median_gas } => {
+                TestKindReport::Fuzz { runs, mean_gas, median_gas }
             }
-            TestKind::Invariant { runs, calls, reverts } => {
-                TestKindReport::Invariant { runs: *runs, calls: *calls, reverts: *reverts }
+            Self::Invariant { runs, calls, reverts } => {
+                TestKindReport::Invariant { runs, calls, reverts }
             }
         }
     }

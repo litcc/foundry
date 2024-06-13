@@ -7,6 +7,9 @@ use hex::FromHexError;
 #[cfg(feature = "aws-kms")]
 use alloy_signer_aws::AwsSignerError;
 
+#[cfg(feature = "gcp-kms")]
+use alloy_signer_gcp::GcpSignerError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PrivateKeyError {
     #[error("Failed to create wallet from private key. Private key is invalid hex: {0}")]
@@ -27,6 +30,9 @@ pub enum WalletSignerError {
     #[cfg(feature = "aws-kms")]
     Aws(#[from] AwsSignerError),
     #[error(transparent)]
+    #[cfg(feature = "gcp-kms")]
+    Gcp(#[from] GcpSignerError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     InvalidHex(#[from] FromHexError),
@@ -38,6 +44,10 @@ pub enum WalletSignerError {
 
 impl WalletSignerError {
     pub fn aws_unsupported() -> Self {
-        WalletSignerError::UnsupportedSigner("AWS KMS")
+        Self::UnsupportedSigner("AWS KMS")
+    }
+
+    pub fn gcp_unsupported() -> Self {
+        Self::UnsupportedSigner("Google Cloud KMS")
     }
 }
