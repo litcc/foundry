@@ -656,7 +656,13 @@ impl<'a> InspectorStackRefMut<'a> {
 impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
     fn initialize_interp(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<DB>) {
         call_inspectors_adjust_depth!(
-            [&mut self.coverage, &mut self.tracer, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.coverage,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.printer
+            ],
             |inspector| inspector.initialize_interp(interpreter, ecx),
             self,
             ecx
@@ -681,7 +687,13 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn step_end(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<DB>) {
         call_inspectors_adjust_depth!(
-            [&mut self.tracer, &mut self.cheatcodes, &mut self.chisel_state, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.chisel_state,
+                &mut self.printer
+            ],
             |inspector| inspector.step_end(interpreter, ecx),
             self,
             ecx
@@ -690,7 +702,13 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn log(&mut self, ecx: &mut EvmContext<DB>, log: &Log) {
         call_inspectors_adjust_depth!(
-            [&mut self.tracer, &mut self.log_collector, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.cheatcodes,
+                &mut self.printer
+            ],
             |inspector| inspector.log(ecx, log),
             self,
             ecx
@@ -863,7 +881,7 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
         call_inspectors_adjust_depth!(
             #[ret]
-            [&mut self.tracer, &mut self.coverage, &mut self.cheatcodes],
+            [&mut self.customizable, &mut self.tracer, &mut self.coverage, &mut self.cheatcodes],
             |inspector| inspector.eofcreate(ecx, create).map(Some),
             self,
             ecx
@@ -905,7 +923,7 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
         call_inspectors_adjust_depth!(
             #[ret]
-            [&mut self.tracer, &mut self.cheatcodes, &mut self.printer],
+            [&mut self.customizable, &mut self.tracer, &mut self.cheatcodes, &mut self.printer],
             |inspector| {
                 let new_outcome = inspector.eofcreate_end(ecx, call, outcome.clone());
 

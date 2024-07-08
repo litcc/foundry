@@ -1,7 +1,9 @@
 use alloy_primitives::{Address, Log, U256};
 use foundry_evm_core::backend::DatabaseError;
 use revm::{
-    interpreter::{CallInputs, CallOutcome, CreateInputs, CreateOutcome, Interpreter},
+    interpreter::{
+        CallInputs, CallOutcome, CreateInputs, CreateOutcome, EOFCreateInputs, Interpreter,
+    },
     primitives::{EVMError, Env},
     Database, EvmContext, Inspector,
 };
@@ -128,6 +130,20 @@ pub trait CustomizableInspector: Any + Send + Sync {
     ) {
     }
 
+    /// Called when EOF creating is called.
+    ///
+    /// This can happen from create TX or from EOFCREATE opcode.
+    fn eofcreate(&mut self, _context: InnerEvmContextWrap<'_, '_>, _inputs: &mut EOFCreateInputs) {}
+
+    /// Called when eof creating has ended.
+    fn eofcreate_end(
+        &mut self,
+        _context: InnerEvmContextWrap<'_, '_>,
+        _inputs: &EOFCreateInputs,
+        _outcome: &CreateOutcome,
+    ) {
+    }
+
     /// Called when a contract has been self-destructed with funds transferred to target.
     #[inline]
     fn selfdestruct(&mut self, _contract: Address, _target: Address, _value: U256) {}
@@ -242,6 +258,27 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
     ) -> CreateOutcome {
         let evm_context = Self::inner_evm_context(context);
         self.inspector.create_end(evm_context, inputs, &outcome);
+        outcome
+    }
+
+    fn eofcreate(
+        &mut self,
+        context: &mut EvmContext<DB>,
+        inputs: &mut EOFCreateInputs,
+    ) -> Option<CreateOutcome> {
+        let evm_context = Self::inner_evm_context(context);
+        self.inspector.eofcreate(evm_context, inputs);
+        None
+    }
+
+    fn eofcreate_end(
+        &mut self,
+        context: &mut EvmContext<DB>,
+        inputs: &EOFCreateInputs,
+        outcome: CreateOutcome,
+    ) -> CreateOutcome {
+        let evm_context = Self::inner_evm_context(context);
+        self.inspector.eofcreate_end(evm_context, inputs, &outcome);
         outcome
     }
 
