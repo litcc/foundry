@@ -10,9 +10,9 @@ use foundry_cli::{
 };
 use foundry_common::{compile::ProjectCompiler, provider::ProviderBuilder};
 use foundry_compilers::{
-    artifacts::{BytecodeHash, BytecodeObject, CompactContractBytecode},
+    artifacts::{BytecodeHash, BytecodeObject, CompactContractBytecode, EvmVersion},
     info::ContractInfo,
-    Artifact, EvmVersion,
+    Artifact,
 };
 use foundry_config::{figment, filter::SkipBuildFilter, impl_figment_convert, Chain, Config};
 use foundry_evm::{
@@ -189,7 +189,7 @@ impl VerifyBytecodeArgs {
         let receipt = provider
             .get_transaction_receipt(creation_data.transaction_hash)
             .await
-            .or_else(|e| eyre::bail!("Couldn't fetch transacrion receipt from RPC: {:?}", e))?;
+            .or_else(|e| eyre::bail!("Couldn't fetch transaction receipt from RPC: {:?}", e))?;
 
         let receipt = if let Some(receipt) = receipt {
             receipt
@@ -199,17 +199,19 @@ impl VerifyBytecodeArgs {
                 creation_data.transaction_hash
             );
         };
+
         // Extract creation code
-        let maybe_creation_code = if receipt.contract_address == Some(self.address) {
-            &transaction.input
-        } else if transaction.to == Some(DEFAULT_CREATE2_DEPLOYER) {
-            &transaction.input[32..]
-        } else {
-            eyre::bail!(
-                "Could not extract the creation code for contract at address {}",
-                self.address
-            );
-        };
+        let maybe_creation_code =
+            if receipt.to.is_none() && receipt.contract_address == Some(self.address) {
+                &transaction.input
+            } else if receipt.to == Some(DEFAULT_CREATE2_DEPLOYER) {
+                &transaction.input[32..]
+            } else {
+                eyre::bail!(
+                    "Could not extract the creation code for contract at address {}",
+                    self.address
+                );
+            };
 
         // If bytecode_hash is disabled then its always partial verification
         let (verification_type, has_metadata) =
@@ -315,10 +317,10 @@ impl VerifyBytecodeArgs {
             if to != DEFAULT_CREATE2_DEPLOYER {
                 eyre::bail!("Transaction `to` address is not the default create2 deployer i.e the tx is not a contract creation tx.");
             }
-            let result = executor.commit_tx_with_env(env_with_handler.to_owned())?;
+            let result = executor.transact_with_env(env_with_handler.clone())?;
 
-            if result.result.len() > 20 {
-                eyre::bail!("Failed to deploy contract using commit_tx_with_env on fork at block {} | Err: Call result is greater than 20 bytes, cannot be converted to Address", simulation_block);
+            if result.result.len() != 20 {
+                eyre::bail!("Failed to deploy contract on fork at block {simulation_block}: call result is not exactly 20 bytes");
             }
 
             Address::from_slice(&result.result)
@@ -329,7 +331,7 @@ impl VerifyBytecodeArgs {
 
         // State commited using deploy_with_env, now get the runtime bytecode from the db.
         let fork_runtime_code = executor
-            .backend
+            .backend_mut()
             .basic(contract_address)?
             .ok_or_else(|| {
                 eyre::eyre!(
@@ -567,7 +569,7 @@ fn try_match(
     has_metadata: bool,
 ) -> Result<(bool, Option<VerificationType>)> {
     // 1. Try full match
-    if *match_type == VerificationType::Full && local_bytecode.starts_with(bytecode) {
+    if *match_type == VerificationType::Full && local_bytecode == bytecode {
         Ok((true, Some(VerificationType::Full)))
     } else {
         try_partial_match(local_bytecode, bytecode, constructor_args, is_runtime, has_metadata)
@@ -583,37 +585,30 @@ fn try_partial_match(
     has_metadata: bool,
 ) -> Result<bool> {
     // 1. Check length of constructor args
-    if constructor_args.is_empty() {
+    if constructor_args.is_empty() || is_runtime {
         // Assume metadata is at the end of the bytecode
-        if has_metadata {
-            local_bytecode = extract_metadata_hash(local_bytecode)?;
-            bytecode = extract_metadata_hash(bytecode)?;
-        }
-
-        // Now compare the creation code and bytecode
-        return Ok(local_bytecode.starts_with(bytecode));
-    }
-
-    if is_runtime {
-        if has_metadata {
-            local_bytecode = extract_metadata_hash(local_bytecode)?;
-            bytecode = extract_metadata_hash(bytecode)?;
-        }
-
-        // Now compare the local code and bytecode
-        return Ok(local_bytecode.starts_with(bytecode));
+        return try_extract_and_compare_bytecode(local_bytecode, bytecode, has_metadata)
     }
 
     // If not runtime, extract constructor args from the end of the bytecode
     bytecode = &bytecode[..bytecode.len() - constructor_args.len()];
     local_bytecode = &local_bytecode[..local_bytecode.len() - constructor_args.len()];
 
+    try_extract_and_compare_bytecode(local_bytecode, bytecode, has_metadata)
+}
+
+fn try_extract_and_compare_bytecode(
+    mut local_bytecode: &[u8],
+    mut bytecode: &[u8],
+    has_metadata: bool,
+) -> Result<bool> {
     if has_metadata {
         local_bytecode = extract_metadata_hash(local_bytecode)?;
         bytecode = extract_metadata_hash(bytecode)?;
     }
 
-    Ok(local_bytecode.starts_with(bytecode))
+    // Now compare the local code and bytecode
+    Ok(local_bytecode == bytecode)
 }
 
 /// @dev This assumes that the metadata is at the end of the bytecode

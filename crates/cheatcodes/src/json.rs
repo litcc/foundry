@@ -2,7 +2,7 @@
 
 use crate::{string, Cheatcode, Cheatcodes, Result, Vm::*};
 use alloy_dyn_abi::{DynSolType, DynSolValue};
-use alloy_primitives::{Address, B256, I256};
+use alloy_primitives::{hex, Address, B256, I256};
 use alloy_sol_types::SolValue;
 use foundry_common::fs;
 use foundry_config::fs_permissions::FsAccessKind;
@@ -448,15 +448,15 @@ pub(super) fn json_value_to_token(value: &Value) -> Result<DynSolValue> {
                     s = format!("0{val}");
                     val = &s[..];
                 }
-                let bytes = hex::decode(val)?;
-                Ok(match bytes.len() {
-                    20 => DynSolValue::Address(Address::from_slice(&bytes)),
-                    32 => DynSolValue::FixedBytes(B256::from_slice(&bytes), 32),
-                    _ => DynSolValue::Bytes(bytes),
-                })
-            } else {
-                Ok(DynSolValue::String(string.to_owned()))
+                if let Ok(bytes) = hex::decode(val) {
+                    return Ok(match bytes.len() {
+                        20 => DynSolValue::Address(Address::from_slice(&bytes)),
+                        32 => DynSolValue::FixedBytes(B256::from_slice(&bytes), 32),
+                        _ => DynSolValue::Bytes(bytes),
+                    });
+                }
             }
+            Ok(DynSolValue::String(string.to_owned()))
         }
     }
 }

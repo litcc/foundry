@@ -21,6 +21,7 @@ forgetest!(can_set_filter_values, |prj, cmd| {
         contract_pattern_inverse: None,
         path_pattern: Some(glob.clone()),
         path_pattern_inverse: None,
+        coverage_pattern_inverse: None,
         ..Default::default()
     };
     prj.write_config(config);
@@ -33,6 +34,7 @@ forgetest!(can_set_filter_values, |prj, cmd| {
     assert_eq!(config.contract_pattern_inverse, None);
     assert_eq!(config.path_pattern.unwrap(), glob);
     assert_eq!(config.path_pattern_inverse, None);
+    assert_eq!(config.coverage_pattern_inverse, None);
 });
 
 // tests that warning is displayed when there are no tests in project
@@ -209,6 +211,7 @@ contract MyTest is DSTest {
 });
 
 // checks that forge test repeatedly produces the same output
+#[cfg(not(feature = "isolate-by-default"))]
 forgetest_init!(can_test_repeatedly, |_prj, cmd| {
     cmd.arg("test");
     cmd.assert_non_empty_stdout();
@@ -264,6 +267,7 @@ contract ContractTest is DSTest {
 });
 
 // tests that libraries are handled correctly in multiforking mode
+#[cfg(not(feature = "isolate-by-default"))]
 forgetest_init!(can_use_libs_in_multi_fork, |prj, cmd| {
     prj.wipe_contracts();
 
@@ -587,10 +591,91 @@ contract CounterTest is Test {
 
     cmd.args(["test"]);
     let (stderr, _) = cmd.unchecked_output_lossy();
+    // make sure there are only 61 runs (with proptest shrinking same test results in 298 runs)
+    assert_eq!(extract_number_of_runs(stderr), 61);
+});
+
+forgetest_init!(should_exit_early_on_invariant_failure, |prj, cmd| {
+    prj.wipe_contracts();
+    prj.add_test(
+        "CounterInvariant.t.sol",
+        r#"pragma solidity 0.8.24;
+import {Test} from "forge-std/Test.sol";
+
+contract Counter {
+    uint256 public number = 0;
+
+    function inc() external {
+        number += 1;
+    }
+}
+
+contract CounterTest is Test {
+    Counter public counter;
+
+    function setUp() public {
+        counter = new Counter();
+    }
+
+    function invariant_early_exit() public view {
+        assertTrue(counter.number() == 10, "wrong count");
+    }
+}
+     "#,
+    )
+    .unwrap();
+
+    cmd.args(["test"]);
+    let (stderr, _) = cmd.unchecked_output_lossy();
+    // make sure invariant test exit early with 0 runs
+    assert_eq!(extract_number_of_runs(stderr), 0);
+});
+
+fn extract_number_of_runs(stderr: String) -> usize {
     let runs = stderr.find("runs:").and_then(|start_runs| {
         let runs_split = &stderr[start_runs + 6..];
         runs_split.find(',').map(|end_runs| &runs_split[..end_runs])
     });
-    // make sure there are only 61 runs (with proptest shrinking same test results in 298 runs)
-    assert_eq!(runs.unwrap().parse::<usize>().unwrap(), 61);
+    runs.unwrap().parse::<usize>().unwrap()
+}
+
+forgetest_init!(should_replay_failures_only, |prj, cmd| {
+    prj.wipe_contracts();
+    prj.add_test(
+        "ReplayFailures.t.sol",
+        r#"pragma solidity 0.8.24;
+import {Test} from "forge-std/Test.sol";
+
+contract ReplayFailuresTest is Test {
+    function testA() public pure {
+        require(2 > 1);
+    }
+
+    function testB() public pure {
+        require(1 > 2, "testB failed");
+    }
+
+    function testC() public pure {
+        require(2 > 1);
+    }
+
+    function testD() public pure {
+        require(1 > 2, "testD failed");
+    }
+}
+     "#,
+    )
+    .unwrap();
+
+    cmd.args(["test"]);
+    cmd.assert_err();
+    // Test failure filter should be persisted.
+    assert!(prj.root().join("cache/test-failures").exists());
+
+    // Perform only the 2 failing tests from last run.
+    cmd.forge_fuse();
+    cmd.args(["test", "--rerun"]).unchecked_output().stdout_matches_path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/replay_last_run_failures.stdout"),
+    );
 });

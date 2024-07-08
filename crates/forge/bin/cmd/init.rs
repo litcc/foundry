@@ -3,7 +3,7 @@ use clap::{Parser, ValueHint};
 use eyre::Result;
 use foundry_cli::{p_println, utils::Git};
 use foundry_common::fs;
-use foundry_compilers::remappings::Remapping;
+use foundry_compilers::artifacts::remappings::Remapping;
 use foundry_config::Config;
 use std::path::{Path, PathBuf};
 use yansi::Paint;
@@ -201,7 +201,7 @@ fn init_git_repo(git: Git<'_>, no_commit: bool) -> Result<()> {
 fn init_vscode(root: &Path) -> Result<()> {
     let remappings_file = root.join("remappings.txt");
     if !remappings_file.exists() {
-        let mut remappings = Remapping::find_many(root.join("lib"))
+        let mut remappings = Remapping::find_many(&root.join("lib"))
             .into_iter()
             .map(|r| r.into_relative(root).to_relative_remapping().to_string())
             .collect::<Vec<_>>();

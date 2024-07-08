@@ -36,31 +36,32 @@ use alloy_consensus::{Header, Receipt, ReceiptWithBloom};
 use alloy_eips::eip4844::MAX_BLOBS_PER_BLOCK;
 use alloy_primitives::{keccak256, Address, Bytes, TxHash, TxKind, B256, U256, U64};
 use alloy_rpc_types::{
-    request::TransactionRequest, serde_helpers::JsonStorageKey, state::StateOverride, AccessList,
-    Block as AlloyBlock, BlockId, BlockNumberOrTag as BlockNumber,
-    EIP1186AccountProofResponse as AccountProof, EIP1186StorageProof as StorageProof, Filter,
-    FilteredParams, Header as AlloyHeader, Log, Transaction, TransactionReceipt, WithOtherFields,
-};
-use alloy_rpc_types_trace::{
-    geth::{DefaultFrame, GethDebugTracingOptions, GethDefaultTracingOptions, GethTrace},
-    parity::LocalizedTransactionTrace,
-};
-use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
-use anvil_core::{
-    eth::{
-        block::{Block, BlockInfo},
-        transaction::{
-            DepositReceipt, MaybeImpersonatedTransaction, PendingTransaction, ReceiptResponse,
-            TransactionInfo, TypedReceipt, TypedTransaction,
-        },
-        utils::meets_eip155,
+    anvil::Forking,
+    request::TransactionRequest,
+    serde_helpers::JsonStorageKey,
+    state::StateOverride,
+    trace::{
+        geth::{DefaultFrame, GethDebugTracingOptions, GethDefaultTracingOptions, GethTrace},
+        parity::LocalizedTransactionTrace,
     },
-    types::{Forking, Index},
+    AccessList, Block as AlloyBlock, BlockId, BlockNumberOrTag as BlockNumber,
+    EIP1186AccountProofResponse as AccountProof, EIP1186StorageProof as StorageProof, Filter,
+    FilteredParams, Header as AlloyHeader, Index, Log, Transaction, TransactionReceipt,
+};
+use alloy_serde::WithOtherFields;
+use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
+use anvil_core::eth::{
+    block::{Block, BlockInfo},
+    transaction::{
+        DepositReceipt, MaybeImpersonatedTransaction, PendingTransaction, ReceiptResponse,
+        TransactionInfo, TypedReceipt, TypedTransaction,
+    },
+    utils::meets_eip155,
 };
 use anvil_rpc::error::RpcError;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use foundry_evm::{
-    backend::{DatabaseError, DatabaseResult, RevertSnapshotAction},
+    backend::{BackendError, BackendResult, DatabaseError, DatabaseResult, RevertSnapshotAction},
     constants::DEFAULT_CREATE2_DEPLOYER_RUNTIME_CODE,
     decode::RevertDecoder,
     inspectors::AccessListInspector,
@@ -69,7 +70,7 @@ use foundry_evm::{
         interpreter::InstructionResult,
         primitives::{
             BlockEnv, CfgEnvWithHandlerCfg, EnvWithHandlerCfg, ExecutionResult, Output, SpecId,
-            TransactTo, TxEnv, KECCAK_EMPTY,
+            TxEnv, KECCAK_EMPTY,
         },
     },
     utils::new_evm_with_inspector_ref,
@@ -165,6 +166,7 @@ pub struct Backend {
     /// keeps track of active snapshots at a specific block
     active_snapshots: Arc<Mutex<HashMap<U256, (u64, B256)>>>,
     enable_steps_tracing: bool,
+    print_logs: bool,
     /// How to keep history state
     prune_state_history_config: PruneStateHistoryConfig,
     /// max number of blocks with transactions in memory
@@ -186,6 +188,7 @@ impl Backend {
         fees: FeeManager,
         fork: Arc<RwLock<Option<ClientFork>>>,
         enable_steps_tracing: bool,
+        print_logs: bool,
         prune_state_history_config: PruneStateHistoryConfig,
         transaction_block_keeper: Option<usize>,
         automine_block_time: Option<Duration>,
@@ -238,6 +241,7 @@ impl Backend {
             genesis,
             active_snapshots: Arc::new(Mutex::new(Default::default())),
             enable_steps_tracing,
+            print_logs,
             prune_state_history_config,
             transaction_block_keeper,
             node_config,
@@ -269,7 +273,7 @@ impl Backend {
     /// Applies the configured genesis settings
     ///
     /// This will fund, create the genesis accounts
-    async fn apply_genesis(&self) -> DatabaseResult<()> {
+    async fn apply_genesis(&self) -> BackendResult<()> {
         trace!(target: "backend", "setting genesis balances");
 
         if self.fork.read().is_some() {
@@ -283,7 +287,7 @@ impl Backend {
                 genesis_accounts_futures.push(tokio::task::spawn(async move {
                     let db = db.read().await;
                     let info = db.basic_ref(address)?.unwrap_or_default();
-                    Ok::<_, DatabaseError>((address, info))
+                    Ok::<_, BackendError>((address, info))
                 }));
             }
 
@@ -298,7 +302,7 @@ impl Backend {
             fork_genesis_infos.clear();
 
             for res in genesis_accounts {
-                let (address, mut info) = res.map_err(DatabaseError::display)??;
+                let (address, mut info) = res.map_err(BackendError::display)??;
                 info.balance = self.genesis.balance;
                 db.insert_account(address, info.clone());
 
@@ -325,26 +329,25 @@ impl Backend {
     /// Sets the account to impersonate
     ///
     /// Returns `true` if the account is already impersonated
-    pub async fn impersonate(&self, addr: Address) -> DatabaseResult<bool> {
+    pub fn impersonate(&self, addr: Address) -> bool {
         if self.cheats.impersonated_accounts().contains(&addr) {
-            return Ok(true);
+            return true
         }
         // Ensure EIP-3607 is disabled
         let mut env = self.env.write();
         env.cfg.disable_eip3607 = true;
-        Ok(self.cheats.impersonate(addr))
+        self.cheats.impersonate(addr)
     }
 
     /// Removes the account that from the impersonated set
     ///
     /// If the impersonated `addr` is a contract then we also reset the code here
-    pub async fn stop_impersonating(&self, addr: Address) -> DatabaseResult<()> {
+    pub fn stop_impersonating(&self, addr: Address) {
         self.cheats.stop_impersonating(&addr);
-        Ok(())
     }
 
     /// If set to true will make every account impersonated
-    pub async fn auto_impersonate_account(&self, enabled: bool) {
+    pub fn auto_impersonate_account(&self, enabled: bool) {
         self.cheats.set_auto_impersonate_account(enabled);
     }
 
@@ -736,7 +739,8 @@ impl Backend {
     pub async fn serialized_state(&self) -> Result<SerializableState, BlockchainError> {
         let at = self.env.read().block.clone();
         let best_number = self.blockchain.storage.read().best_number;
-        let state = self.db.read().await.dump_state(at, best_number)?;
+        let blocks = self.blockchain.storage.read().serialized_blocks();
+        let state = self.db.read().await.dump_state(at, best_number, blocks)?;
         state.ok_or_else(|| {
             RpcError::invalid_params("Dumping state not supported with the current configuration")
                 .into()
@@ -765,14 +769,16 @@ impl Backend {
                 state.best_block_number.unwrap_or(block.number.to::<U64>());
         }
 
-        if !self.db.write().await.load_state(state)? {
-            Err(RpcError::invalid_params(
+        if !self.db.write().await.load_state(state.clone())? {
+            return Err(RpcError::invalid_params(
                 "Loading state not supported with the current configuration",
             )
-            .into())
-        } else {
-            Ok(true)
+            .into());
         }
+
+        self.blockchain.storage.write().load_blocks(state.blocks.clone());
+
+        Ok(true)
     }
 
     /// Deserialize and add all chain data to the backend storage
@@ -894,6 +900,7 @@ impl Backend {
             gas_used: 0,
             blob_gas_used: 0,
             enable_steps_tracing: self.enable_steps_tracing,
+            print_logs: self.print_logs,
             precompile_factory: self.precompile_factory.clone(),
         };
 
@@ -935,7 +942,9 @@ impl Backend {
             env.block.number = env.block.number.saturating_add(U256::from(1));
             env.block.basefee = U256::from(current_base_fee);
             env.block.blob_excess_gas_and_price = current_excess_blob_gas_and_price;
-            env.block.timestamp = U256::from(self.time.next_timestamp());
+
+            // pick a random value for prevrandao
+            env.block.prevrandao = Some(B256::random());
 
             let best_hash = self.blockchain.storage.read().best_hash;
 
@@ -947,6 +956,12 @@ impl Backend {
 
             let (executed_tx, block_hash) = {
                 let mut db = self.db.write().await;
+
+                // finally set the next block timestamp, this is done just before execution, because
+                // there can be concurrent requests that can delay acquiring the db lock and we want
+                // to ensure the timestamp is as close as possible to the actual execution.
+                env.block.timestamp = U256::from(self.time.next_timestamp());
+
                 let executor = TransactionExecutor {
                     db: &mut *db,
                     validator: self,
@@ -957,6 +972,7 @@ impl Backend {
                     gas_used: 0,
                     blob_gas_used: 0,
                     enable_steps_tracing: self.enable_steps_tracing,
+                    print_logs: self.print_logs,
                     precompile_factory: self.precompile_factory.clone(),
                 };
                 let executed_tx = executor.execute();
@@ -1152,8 +1168,8 @@ impl Backend {
             gas_priority_fee: max_priority_fee_per_gas.map(U256::from),
             max_fee_per_blob_gas: max_fee_per_blob_gas.map(U256::from),
             transact_to: match to {
-                Some(addr) => TransactTo::Call(*addr),
-                None => TransactTo::Create,
+                Some(addr) => TxKind::Call(*addr),
+                None => TxKind::Create,
             },
             value: value.unwrap_or_default(),
             data: input.into_input().unwrap_or_default(),
@@ -1164,7 +1180,7 @@ impl Backend {
             optimism: OptimismFields { enveloped_tx: Some(Bytes::new()), ..Default::default() },
         };
 
-        if env.block.basefee == revm::primitives::U256::ZERO {
+        if env.block.basefee.is_zero() {
             // this is an edge case because the evm fails if `tx.effective_gas_price < base_fee`
             // 0 is only possible if it's manually set
             env.cfg.disable_base_fee = true;
@@ -1378,7 +1394,7 @@ impl Backend {
                 to_on_fork = fork.block_number();
             }
 
-            if fork.predates_fork(from) {
+            if fork.predates_fork_inclusive(from) {
                 // this data is only available on the forked client
                 let filter = filter.clone().from_block(from).to_block(to_on_fork);
                 all_logs = fork.logs(&filter).await?;
@@ -1914,8 +1930,8 @@ impl Backend {
         hash: B256,
         opts: GethDebugTracingOptions,
     ) -> Result<GethTrace, BlockchainError> {
-        if let Some(traces) = self.mined_geth_trace_transaction(hash, opts.clone()) {
-            return Ok(GethTrace::Default(traces));
+        if let Some(trace) = self.mined_geth_trace_transaction(hash, opts.clone()) {
+            return trace;
         }
 
         if let Some(fork) = self.get_fork() {
@@ -1929,8 +1945,8 @@ impl Backend {
         &self,
         hash: B256,
         opts: GethDebugTracingOptions,
-    ) -> Option<DefaultFrame> {
-        self.blockchain.storage.read().transactions.get(&hash).map(|tx| tx.geth_trace(opts.config))
+    ) -> Option<Result<GethTrace, BlockchainError>> {
+        self.blockchain.storage.read().transactions.get(&hash).map(|tx| tx.geth_trace(opts))
     }
 
     /// Returns the traces for the given block
@@ -2143,7 +2159,7 @@ impl Backend {
         Ok(None)
     }
 
-    fn mined_transaction_by_block_hash_and_index(
+    pub fn mined_transaction_by_block_hash_and_index(
         &self,
         block_hash: B256,
         index: Index,
@@ -2182,7 +2198,7 @@ impl Backend {
         Ok(None)
     }
 
-    fn mined_transaction_by_hash(&self, hash: B256) -> Option<WithOtherFields<Transaction>> {
+    pub fn mined_transaction_by_hash(&self, hash: B256) -> Option<WithOtherFields<Transaction>> {
         let (info, block) = {
             let storage = self.blockchain.storage.read();
             let MinedTransaction { info, block_hash, .. } =

@@ -3,7 +3,11 @@ use clap::Parser;
 use eyre::Result;
 use foundry_cli::{opts::CoreBuildArgs, utils::LoadConfig};
 use foundry_common::compile::ProjectCompiler;
-use foundry_compilers::{Project, ProjectCompileOutput};
+use foundry_compilers::{
+    compilers::{multi::MultiCompilerLanguage, Language},
+    utils::source_files_iter,
+    Project, ProjectCompileOutput,
+};
 use foundry_config::{
     figment::{
         self,
@@ -14,6 +18,7 @@ use foundry_config::{
     Config,
 };
 use serde::Serialize;
+use std::path::PathBuf;
 use watchexec::config::{InitConfig, RuntimeConfig};
 
 foundry_config::merge_impl_figment_convert!(BuildArgs, args);
@@ -42,6 +47,10 @@ foundry_config::merge_impl_figment_convert!(BuildArgs, args);
 #[derive(Clone, Debug, Default, Serialize, Parser)]
 #[command(next_help_heading = "Build options", about = None, long_about = None)] // override doc
 pub struct BuildArgs {
+    /// Build source files from specified paths.
+    #[serde(skip)]
+    pub paths: Option<Vec<PathBuf>>,
+
     /// Print compiled contract names.
     #[arg(long)]
     #[serde(skip)]
@@ -80,7 +89,18 @@ impl BuildArgs {
 
         let project = config.project()?;
 
+        // Collect sources to compile if build subdirectories specified.
+        let mut files = vec![];
+        if let Some(paths) = &self.paths {
+            for path in paths {
+                let joined = project.root().join(path);
+                let path = if joined.exists() { &joined } else { path };
+                files.extend(source_files_iter(path, MultiCompilerLanguage::FILE_EXTENSIONS));
+            }
+        }
+
         let compiler = ProjectCompiler::new()
+            .files(files)
             .print_names(self.names)
             .print_sizes(self.sizes)
             .quiet(self.format_json)
@@ -89,7 +109,7 @@ impl BuildArgs {
         let output = compiler.compile(&project)?;
 
         if self.format_json {
-            println!("{}", serde_json::to_string_pretty(&output.clone().output())?);
+            println!("{}", serde_json::to_string_pretty(&output.output())?);
         }
 
         Ok(output)

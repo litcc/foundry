@@ -1,9 +1,9 @@
 use alloy_dyn_abi::TypedData;
-use alloy_primitives::{Address, Signature, B256};
+use alloy_primitives::{hex, Address, Signature, B256};
 use alloy_signer::Signer;
-use alloy_signer_wallet::{
-    coins_bip39::{English, Mnemonic},
-    LocalWallet, MnemonicBuilder,
+use alloy_signer_local::{
+    coins_bip39::{English, Entropy, Mnemonic},
+    MnemonicBuilder, PrivateKeySigner,
 };
 use clap::Parser;
 use eyre::{Context, Result};
@@ -61,6 +61,10 @@ pub enum WalletSubcommands {
         /// Number of accounts to display
         #[arg(long, short, default_value = "1")]
         accounts: u8,
+
+        /// Entropy to use for the mnemonic
+        #[arg(long, short, conflicts_with = "words")]
+        entropy: Option<String>,
     },
 
     /// Generate a vanity address.
@@ -214,8 +218,12 @@ impl WalletSubcommands {
                     };
 
                     for _ in 0..number {
-                        let (wallet, uuid) =
-                            LocalWallet::new_keystore(&path, &mut rng, password.clone(), None)?;
+                        let (wallet, uuid) = PrivateKeySigner::new_keystore(
+                            &path,
+                            &mut rng,
+                            password.clone(),
+                            None,
+                        )?;
 
                         if let Some(json) = json_values.as_mut() {
                             json.push(json!({
@@ -237,17 +245,20 @@ impl WalletSubcommands {
                     }
                 } else {
                     for _ in 0..number {
-                        let wallet = LocalWallet::random_with(&mut rng);
+                        let wallet = PrivateKeySigner::random_with(&mut rng);
 
                         if let Some(json) = json_values.as_mut() {
                             json.push(json!({
                                 "address": wallet.address().to_checksum(None),
-                                "private_key": format!("0x{}", hex::encode(wallet.signer().to_bytes())),
+                                "private_key": format!("0x{}", hex::encode(wallet.credential().to_bytes())),
                             }))
                         } else {
                             println!("Successfully created new keypair.");
                             println!("Address:     {}", wallet.address().to_checksum(None));
-                            println!("Private key: 0x{}", hex::encode(wallet.signer().to_bytes()));
+                            println!(
+                                "Private key: 0x{}",
+                                hex::encode(wallet.credential().to_bytes())
+                            );
                         }
                     }
 
@@ -256,9 +267,15 @@ impl WalletSubcommands {
                     }
                 }
             }
-            Self::NewMnemonic { words, accounts } => {
-                let mut rng = thread_rng();
-                let phrase = Mnemonic::<English>::new_with_count(&mut rng, words)?.to_phrase();
+            Self::NewMnemonic { words, accounts, entropy } => {
+                let phrase = if let Some(entropy) = entropy {
+                    let entropy = Entropy::from_slice(hex::decode(entropy)?)?;
+                    println!("{}", "Generating mnemonic from provided entropy...".yellow());
+                    Mnemonic::<English>::new_from_entropy(entropy).to_phrase()
+                } else {
+                    let mut rng = thread_rng();
+                    Mnemonic::<English>::new_with_count(&mut rng, words)?.to_phrase()
+                };
 
                 let builder = MnemonicBuilder::<English>::default().phrase(phrase.as_str());
                 let derivation_path = "m/44'/60'/0'/0/";
@@ -274,7 +291,7 @@ impl WalletSubcommands {
                 for (i, wallet) in wallets.iter().enumerate() {
                     println!("- Account {i}:");
                     println!("Address:     {}", wallet.address());
-                    println!("Private key: 0x{}\n", hex::encode(wallet.signer().to_bytes()));
+                    println!("Private key: 0x{}\n", hex::encode(wallet.credential().to_bytes()));
                 }
             }
             Self::Vanity(cmd) => {
@@ -353,7 +370,7 @@ flag to set your key via:
                         )
                     })?;
 
-                let private_key = wallet.signer().to_bytes();
+                let private_key = wallet.credential().to_bytes();
                 let password = if let Some(password) = unsafe_password {
                     password
                 } else {
@@ -362,7 +379,7 @@ flag to set your key via:
                 };
 
                 let mut rng = thread_rng();
-                let (wallet, _) = LocalWallet::encrypt_keystore(
+                let (wallet, _) = PrivateKeySigner::encrypt_keystore(
                     dir,
                     &mut rng,
                     private_key,
@@ -408,9 +425,12 @@ flag to set your key via:
                     WalletSigner::Local(wallet) => {
                         if verbose {
                             println!("Address:     {}", wallet.address());
-                            println!("Private key: 0x{}", hex::encode(wallet.signer().to_bytes()));
+                            println!(
+                                "Private key: 0x{}",
+                                hex::encode(wallet.credential().to_bytes())
+                            );
                         } else {
-                            println!("0x{}", hex::encode(wallet.signer().to_bytes()));
+                            println!("0x{}", hex::encode(wallet.credential().to_bytes()));
                         }
                     }
                     _ => {
@@ -441,9 +461,9 @@ flag to set your key via:
                     rpassword::prompt_password("Enter password: ")?
                 };
 
-                let wallet = LocalWallet::decrypt_keystore(keypath, password)?;
+                let wallet = PrivateKeySigner::decrypt_keystore(keypath, password)?;
 
-                let private_key = B256::from_slice(&wallet.signer().to_bytes());
+                let private_key = B256::from_slice(&wallet.credential().to_bytes());
 
                 let success_message =
                     format!("{}'s private key is: {}", &account_name, private_key);

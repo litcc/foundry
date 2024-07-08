@@ -5,11 +5,14 @@ use comfy_table::{presets::ASCII_MARKDOWN, Attribute, Cell, CellAlignment, Color
 use eyre::{Context, Result};
 use foundry_block_explorers::contract::Metadata;
 use foundry_compilers::{
-    artifacts::{BytecodeObject, ContractBytecodeSome, Libraries, Source},
-    compilers::{multi::MultiCompilerLanguage, solc::SolcCompiler, Compiler},
-    remappings::Remapping,
+    artifacts::{remappings::Remapping, BytecodeObject, ContractBytecodeSome, Libraries, Source},
+    compilers::{
+        multi::MultiCompilerLanguage,
+        solc::{Solc, SolcCompiler},
+        Compiler,
+    },
     report::{BasicStdoutReporter, NoReporter, Report},
-    Artifact, Project, ProjectBuilder, ProjectCompileOutput, ProjectPathsConfig, Solc, SolcConfig,
+    Artifact, Project, ProjectBuilder, ProjectCompileOutput, ProjectPathsConfig, SolcConfig,
 };
 use foundry_linking::Linker;
 use num_format::{Locale, ToFormattedString};
@@ -162,18 +165,8 @@ impl ProjectCompiler {
     {
         let quiet = self.quiet.unwrap_or(false);
         let bail = self.bail.unwrap_or(true);
-        #[allow(clippy::collapsible_else_if)]
-        let reporter = if quiet {
-            Report::new(NoReporter::default())
-        } else {
-            if std::io::stdout().is_terminal() {
-                Report::new(SpinnerReporter::spawn())
-            } else {
-                Report::new(BasicStdoutReporter::default())
-            }
-        };
 
-        let output = foundry_compilers::report::with_scoped(&reporter, || {
+        let output = with_compilation_reporter(self.quiet.unwrap_or(false), || {
             tracing::debug!("compiling project");
 
             let timer = Instant::now();
@@ -183,9 +176,6 @@ impl ProjectCompiler {
             tracing::debug!("finished compiling in {:.3}s", elapsed.as_secs_f64());
             r
         })?;
-
-        // need to drop the reporter here, so that the spinner terminates
-        drop(reporter);
 
         if bail && output.has_compiler_errors() {
             eyre::bail!("{output}")
@@ -247,16 +237,16 @@ impl ProjectCompiler {
             for (name, artifact) in artifacts {
                 let size = deployed_contract_size(artifact).unwrap_or_default();
 
-                let dev_functions =
-                    artifact.abi.as_ref().map(|abi| abi.functions()).into_iter().flatten().filter(
-                        |func| {
-                            func.name.is_test() ||
-                                func.name.eq("IS_TEST") ||
-                                func.name.eq("IS_SCRIPT")
-                        },
-                    );
-
-                let is_dev_contract = dev_functions.count() > 0;
+                let is_dev_contract = artifact
+                    .abi
+                    .as_ref()
+                    .map(|abi| {
+                        abi.functions().any(|f| {
+                            f.test_function_kind().is_known() ||
+                                matches!(f.name.as_str(), "IS_TEST" | "IS_SCRIPT")
+                        })
+                    })
+                    .unwrap_or(false);
                 size_report.contracts.insert(name, ContractInfo { size, is_dev_contract });
             }
 
@@ -275,6 +265,7 @@ impl ProjectCompiler {
 pub struct SourceData {
     pub source: Arc<String>,
     pub language: MultiCompilerLanguage,
+    pub name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -297,24 +288,25 @@ impl ContractSources {
     /// Collects the contract sources and artifacts from the project compile output.
     pub fn from_project_output(
         output: &ProjectCompileOutput,
-        link_data: Option<(&Path, &Libraries)>,
+        root: impl AsRef<Path>,
+        libraries: Option<&Libraries>,
     ) -> Result<Self> {
         let mut sources = Self::default();
-
-        sources.insert(output, link_data)?;
-
+        sources.insert(output, root, libraries)?;
         Ok(sources)
     }
 
     pub fn insert<C: Compiler>(
         &mut self,
         output: &ProjectCompileOutput<C>,
-        link_data: Option<(&Path, &Libraries)>,
+        root: impl AsRef<Path>,
+        libraries: Option<&Libraries>,
     ) -> Result<()>
     where
         C::Language: Into<MultiCompilerLanguage>,
     {
-        let link_data = link_data.map(|(root, libraries)| {
+        let root = root.as_ref();
+        let link_data = libraries.map(|libraries| {
             let linker = Linker::new(root, output.artifact_ids().collect());
             (linker, libraries)
         });
@@ -355,7 +347,11 @@ impl ContractSources {
 
                 self.sources_by_id.entry(build_id.clone()).or_default().insert(
                     *source_id,
-                    SourceData { source: source_code, language: build.language.into() },
+                    SourceData {
+                        source: source_code,
+                        language: build.language.into(),
+                        name: path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_string(),
+                    },
                 );
             }
         }
@@ -496,26 +492,6 @@ pub fn compile_target<C: Compiler>(
     ProjectCompiler::new().quiet(quiet).files([target_path.into()]).compile(project)
 }
 
-/// Compiles an Etherscan source from metadata by creating a project.
-/// Returns the artifact_id, the file_id, and the bytecode
-pub async fn compile_from_source(
-    metadata: &Metadata,
-) -> Result<ProjectCompileOutput<SolcCompiler>> {
-    let root = tempfile::tempdir()?;
-    let root_path = root.path();
-    let project = etherscan_project(metadata, root_path)?;
-
-    let project_output = project.compile()?;
-
-    if project_output.has_compiler_errors() {
-        eyre::bail!("{project_output}")
-    }
-
-    root.close()?;
-
-    Ok(project_output)
-}
-
 /// Creates a [Project] from an Etherscan source.
 pub fn etherscan_project(
     metadata: &Metadata,
@@ -562,4 +538,20 @@ pub fn etherscan_project(
         .ephemeral()
         .no_artifacts()
         .build(compiler)?)
+}
+
+/// Configures the reporter and runs the given closure.
+pub fn with_compilation_reporter<O>(quiet: bool, f: impl FnOnce() -> O) -> O {
+    #[allow(clippy::collapsible_else_if)]
+    let reporter = if quiet {
+        Report::new(NoReporter::default())
+    } else {
+        if std::io::stdout().is_terminal() {
+            Report::new(SpinnerReporter::spawn())
+        } else {
+            Report::new(BasicStdoutReporter::default())
+        }
+    };
+
+    foundry_compilers::report::with_scoped(&reporter, f)
 }

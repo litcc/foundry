@@ -7,7 +7,10 @@ use forge::{
     gas_report::GasReport,
     multi_runner::matches_contract,
     result::{SuiteResult, TestOutcome, TestStatus},
-    traces::{identifier::SignaturesIdentifier, CallTraceDecoderBuilder, TraceKind},
+    traces::{
+        decode_trace_arena, identifier::SignaturesIdentifier, render_trace_arena,
+        CallTraceDecoderBuilder, TraceKind,
+    },
     MultiContractRunner, MultiContractRunnerBuilder, TestFilter, TestOptions, TestOptionsBuilder,
 };
 use foundry_cli::{
@@ -17,7 +20,7 @@ use foundry_cli::{
 use foundry_common::{
     compile::{ContractSources, ProjectCompiler},
     evm::EvmArgs,
-    shell,
+    fs, shell,
 };
 use foundry_compilers::{
     artifacts::output_selection::OutputSelection,
@@ -49,7 +52,6 @@ mod summary;
 use summary::TestSummaryReporter;
 
 pub use filter::FilterArgs;
-use forge::traces::render_trace_arena;
 
 // Loads project's figment and merges the build cli arguments into it
 foundry_config::merge_impl_figment_convert!(TestArgs, opts, evm_opts);
@@ -85,7 +87,7 @@ pub struct TestArgs {
     allow_failure: bool,
 
     /// Output test results in JSON format.
-    #[arg(long, short, help_heading = "Display options")]
+    #[arg(long, help_heading = "Display options")]
     json: bool,
 
     /// Stop running tests after the first failure.
@@ -113,11 +115,20 @@ pub struct TestArgs {
 
     /// Max concurrent threads to use.
     /// Default value is the number of available CPUs.
+    #[arg(long, short = 'j', visible_alias = "jobs")]
+    pub threads: Option<usize>,
+
+    /// Show test execution progress.
     #[arg(long)]
-    pub max_threads: Option<u64>,
+    pub show_progress: bool,
 
     #[command(flatten)]
     filter: FilterArgs,
+
+    /// Re-run recorded test failures from last run.
+    /// If no failure recorded then regular test run is performed.
+    #[arg(long)]
+    pub rerun: bool,
 
     #[command(flatten)]
     evm_opts: EvmArgs,
@@ -135,10 +146,6 @@ pub struct TestArgs {
     /// Print detailed test summary table.
     #[arg(long, help_heading = "Display options", requires = "summary")]
     pub detailed: bool,
-
-    /// Show test execution progress.
-    #[arg(long)]
-    pub show_progress: bool,
 }
 
 impl TestArgs {
@@ -217,7 +224,7 @@ impl TestArgs {
 
         // Always recompile all sources to ensure that `getCode` cheatcode can use any artifact.
         test_sources.extend(source_files_iter(
-            project.paths.sources,
+            &project.paths.sources,
             MultiCompilerLanguage::FILE_EXTENSIONS,
         ));
 
@@ -231,17 +238,17 @@ impl TestArgs {
     ///
     /// Returns the test results for all matching tests.
     pub async fn execute_tests(self) -> Result<TestOutcome> {
-        // Set number of max threads to execute tests.
-        // If not specified then the number of threads determined by rayon will be used.
-        if let Some(test_threads) = self.max_threads {
-            trace!(target: "forge::test", "execute tests with {} max threads", test_threads);
-            rayon::ThreadPoolBuilder::new().num_threads(test_threads as usize).build_global()?;
-        }
-
-        // Merge all configs
+        // Merge all configs.
         let (mut config, mut evm_opts) = self.load_config_and_evm_opts_emit_warnings()?;
 
-        // Explicitly enable isolation for gas reports for more correct gas accounting
+        // Set number of max threads to execute tests.
+        // If not specified then the number of threads determined by rayon will be used.
+        if let Some(test_threads) = config.threads {
+            trace!(target: "forge::test", "execute tests with {} max threads", test_threads);
+            rayon::ThreadPoolBuilder::new().num_threads(test_threads).build_global()?;
+        }
+
+        // Explicitly enable isolation for gas reports for more correct gas accounting.
         if self.gas_report {
             evm_opts.isolate = true;
         } else {
@@ -284,7 +291,7 @@ impl TestArgs {
             .profiles(profiles)
             .build(&output, project_root)?;
 
-        // Determine print verbosity and executor verbosity
+        // Determine print verbosity and executor verbosity.
         let verbosity = evm_opts.verbosity;
         if self.gas_report && evm_opts.verbosity < 3 {
             evm_opts.verbosity = 3;
@@ -292,14 +299,9 @@ impl TestArgs {
 
         let env = evm_opts.evm_env().await?;
 
-        // Prepare the test builder
+        // Prepare the test builder.
         let should_debug = self.debug.is_some();
-
-        // Clone the output only if we actually need it later for the debugger.
-        let output_clone = should_debug.then(|| output.clone());
-
         let config = Arc::new(config);
-
         let runner = MultiContractRunnerBuilder::new(config.clone())
             .set_debug(should_debug)
             .initial_balance(evm_opts.initial_balance)
@@ -308,7 +310,7 @@ impl TestArgs {
             .with_fork(evm_opts.get_fork(&config, env.clone()))
             .with_test_options(test_options)
             .enable_isolation(evm_opts.isolate)
-            .build(project_root, output, env, evm_opts)?;
+            .build(project_root, &output, env, evm_opts)?;
 
         if let Some(debug_test_pattern) = &self.debug {
             let test_pattern = &mut filter.args_mut().test_pattern;
@@ -325,7 +327,7 @@ impl TestArgs {
         let outcome = self.run_tests(runner, config, verbosity, &filter).await?;
 
         if should_debug {
-            // Get first non-empty suite result. We will have only one such entry
+            // Get first non-empty suite result. We will have only one such entry.
             let Some((_, test_result)) = outcome
                 .results
                 .iter()
@@ -335,14 +337,14 @@ impl TestArgs {
                 return Err(eyre::eyre!("no tests were executed"));
             };
 
-            let sources = ContractSources::from_project_output(
-                output_clone.as_ref().unwrap(),
-                Some((project.root(), &libraries)),
-            )?;
+            let sources =
+                ContractSources::from_project_output(&output, project.root(), Some(&libraries))?;
 
             // Run the debugger.
             let mut builder = Debugger::builder()
-                .debug_arenas(test_result.debug.as_slice())
+                .traces(
+                    test_result.traces.iter().filter(|(t, _)| t.is_execution()).cloned().collect(),
+                )
                 .sources(sources)
                 .breakpoints(test_result.breakpoints.clone());
             if let Some(decoder) = &outcome.last_run_decoder {
@@ -390,7 +392,7 @@ impl TestArgs {
         // Run tests.
         let (tx, rx) = channel::<(String, SuiteResult)>();
         let timer = Instant::now();
-        let show_progress = self.show_progress;
+        let show_progress = config.show_progress;
         let handle = tokio::task::spawn_blocking({
             let filter = filter.clone();
             move || runner.test(&filter, tx, show_progress)
@@ -474,7 +476,7 @@ impl TestArgs {
 
                 // Identify addresses and decode traces.
                 let mut decoded_traces = Vec::with_capacity(result.traces.len());
-                for (kind, arena) in &result.traces {
+                for (kind, arena) in &mut result.traces.clone() {
                     if identify_addresses {
                         decoder.identify(arena, &mut identifier);
                     }
@@ -495,7 +497,8 @@ impl TestArgs {
                     };
 
                     if should_include {
-                        decoded_traces.push(render_trace_arena(arena, &decoder).await?);
+                        decode_trace_arena(arena, &decoder).await?;
+                        decoded_traces.push(render_trace_arena(arena));
                     }
                 }
 
@@ -570,12 +573,20 @@ impl TestArgs {
             }
         }
 
+        // Persist test run failures to enable replaying.
+        persist_run_failures(&config, &outcome);
+
         Ok(outcome)
     }
 
     /// Returns the flattened [`FilterArgs`] arguments merged with [`Config`].
+    /// Loads and applies filter from file if only last test run failures performed.
     pub fn filter(&self, config: &Config) -> ProjectPathsAwareFilter {
-        self.filter.clone().merge_with_config(config)
+        let mut filter = self.filter.clone();
+        if self.rerun {
+            filter.test_pattern = last_run_failures(config);
+        }
+        filter.merge_with_config(config)
     }
 
     /// Returns whether `BuildArgs` was configured with `--watch`
@@ -619,6 +630,14 @@ impl Provider for TestArgs {
             dict.insert("etherscan_api_key".to_string(), etherscan_api_key.to_string().into());
         }
 
+        if self.show_progress {
+            dict.insert("show_progress".to_string(), true.into());
+        }
+
+        if let Some(threads) = self.threads {
+            dict.insert("threads".to_string(), threads.into());
+        }
+
         Ok(Map::from([(Config::selected_profile(), dict)]))
     }
 }
@@ -643,6 +662,31 @@ fn list(
         }
     }
     Ok(TestOutcome::empty(false))
+}
+
+/// Load persisted filter (with last test run failures) from file.
+fn last_run_failures(config: &Config) -> Option<regex::Regex> {
+    match fs::read_to_string(&config.test_failures_file) {
+        Ok(filter) => Some(Regex::new(&filter).unwrap()),
+        Err(_) => None,
+    }
+}
+
+/// Persist filter with last test run failures (only if there's any failure).
+fn persist_run_failures(config: &Config, outcome: &TestOutcome) {
+    if outcome.failed() > 0 && fs::create_file(&config.test_failures_file).is_ok() {
+        let mut filter = String::new();
+        let mut failures = outcome.failures().peekable();
+        while let Some((test_name, _)) = failures.next() {
+            if let Some(test_match) = test_name.split("(").next() {
+                filter.push_str(test_match);
+                if failures.peek().is_some() {
+                    filter.push('|');
+                }
+            }
+        }
+        let _ = fs::write(&config.test_failures_file, filter);
+    }
 }
 
 #[cfg(test)]

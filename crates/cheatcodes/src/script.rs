@@ -2,55 +2,55 @@
 
 use crate::{Cheatcode, CheatsCtxt, DatabaseExt, Result, Vm::*};
 use alloy_primitives::{Address, B256, U256};
-use alloy_signer_wallet::LocalWallet;
+use alloy_signer_local::PrivateKeySigner;
 use foundry_wallets::{multi_wallet::MultiWallet, WalletSigner};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 impl Cheatcode for broadcast_0Call {
-    fn apply_full<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
+    fn apply_stateful<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
         let Self {} = self;
         broadcast(ccx, None, true)
     }
 }
 
 impl Cheatcode for broadcast_1Call {
-    fn apply_full<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
+    fn apply_stateful<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
         let Self { signer } = self;
         broadcast(ccx, Some(signer), true)
     }
 }
 
 impl Cheatcode for broadcast_2Call {
-    fn apply_full<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
+    fn apply_stateful<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
         let Self { privateKey } = self;
         broadcast_key(ccx, privateKey, true)
     }
 }
 
 impl Cheatcode for startBroadcast_0Call {
-    fn apply_full<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
+    fn apply_stateful<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
         let Self {} = self;
         broadcast(ccx, None, false)
     }
 }
 
 impl Cheatcode for startBroadcast_1Call {
-    fn apply_full<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
+    fn apply_stateful<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
         let Self { signer } = self;
         broadcast(ccx, Some(signer), false)
     }
 }
 
 impl Cheatcode for startBroadcast_2Call {
-    fn apply_full<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
+    fn apply_stateful<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
         let Self { privateKey } = self;
         broadcast_key(ccx, privateKey, false)
     }
 }
 
 impl Cheatcode for stopBroadcastCall {
-    fn apply_full<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
+    fn apply_stateful<DB: DatabaseExt>(&self, ccx: &mut CheatsCtxt<DB>) -> Result {
         let Self {} = self;
         let Some(broadcast) = ccx.state.broadcast.take() else {
             bail!("no broadcast in progress to stop");
@@ -107,12 +107,12 @@ impl ScriptWallets {
 
     /// Locks inner Mutex and adds a signer to the [MultiWallet].
     pub fn add_private_key(&self, private_key: &B256) -> Result<()> {
-        self.add_local_signer(LocalWallet::from_bytes(private_key)?);
+        self.add_local_signer(PrivateKeySigner::from_bytes(private_key)?);
         Ok(())
     }
 
     /// Locks inner Mutex and adds a signer to the [MultiWallet].
-    pub fn add_local_signer(&self, wallet: LocalWallet) {
+    pub fn add_local_signer(&self, wallet: PrivateKeySigner) {
         self.inner.lock().multi_wallet.add_signer(WalletSigner::Local(wallet));
     }
 

@@ -136,7 +136,8 @@ impl LinkedBuildData {
     ) -> Result<Self> {
         let sources = ContractSources::from_project_output(
             &build_data.output,
-            Some((&build_data.project_root, &libraries)),
+            &build_data.project_root,
+            Some(&libraries),
         )?;
 
         let known_contracts =
@@ -184,6 +185,7 @@ impl PreprocessedState {
             }
         };
 
+        #[allow(clippy::redundant_clone)]
         let sources_to_compile = source_files_iter(
             project.paths.sources.as_path(),
             MultiCompilerLanguage::FILE_EXTENSIONS,

@@ -4,20 +4,21 @@ use crate::eth::transaction::optimism::{DepositTransaction, DepositTransactionRe
 use alloy_consensus::{
     transaction::eip4844::{TxEip4844, TxEip4844Variant, TxEip4844WithSidecar},
     AnyReceiptEnvelope, Receipt, ReceiptEnvelope, ReceiptWithBloom, Signed, TxEip1559, TxEip2930,
-    TxEnvelope, TxLegacy, TxReceipt,
+    TxEnvelope, TxLegacy, TxReceipt, TxType,
 };
 use alloy_eips::eip2718::{Decodable2718, Eip2718Error, Encodable2718};
 use alloy_primitives::{Address, Bloom, Bytes, Log, Signature, TxHash, TxKind, B256, U256, U64};
 use alloy_rlp::{length_of_length, Decodable, Encodable, Header};
 use alloy_rpc_types::{
-    other::OtherFields, request::TransactionRequest, AccessList, AnyTransactionReceipt,
-    Signature as RpcSignature, Transaction as RpcTransaction, TransactionReceipt, WithOtherFields,
+    request::TransactionRequest, trace::otterscan::OtsReceipt, AccessList, AnyTransactionReceipt,
+    ConversionError, Signature as RpcSignature, Transaction as RpcTransaction, TransactionReceipt,
 };
+use alloy_serde::{OtherFields, WithOtherFields};
 use bytes::BufMut;
 use foundry_evm::traces::CallTraceNode;
 use revm::{
     interpreter::InstructionResult,
-    primitives::{OptimismFields, TransactTo, TxEnv},
+    primitives::{OptimismFields, TxEnv},
 };
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, Mul};
@@ -69,7 +70,7 @@ pub fn transaction_request_to_typed(
             gas_limit: gas.unwrap_or_default(),
             is_system_tx: other.get_deserialized::<bool>("isSystemTx")?.ok()?,
             input: input.into_input().unwrap_or_default(),
-        }))
+        }));
     }
 
     match (
@@ -197,7 +198,7 @@ impl MaybeImpersonatedTransaction {
     #[cfg(feature = "impersonated-tx")]
     pub fn recover(&self) -> Result<Address, alloy_primitives::SignatureError> {
         if let Some(sender) = self.impersonated_sender {
-            return Ok(sender)
+            return Ok(sender);
         }
         self.transaction.recover()
     }
@@ -210,7 +211,7 @@ impl MaybeImpersonatedTransaction {
     pub fn hash(&self) -> B256 {
         if self.transaction.is_impersonated() {
             if let Some(sender) = self.impersonated_sender {
-                return self.transaction.impersonated_hash(sender)
+                return self.transaction.impersonated_hash(sender);
             }
         }
         self.transaction.hash()
@@ -445,10 +446,10 @@ impl PendingTransaction {
     /// Converts the [PendingTransaction] into the [TxEnv] context that [`revm`](foundry_evm)
     /// expects.
     pub fn to_revm_tx_env(&self) -> TxEnv {
-        fn transact_to(kind: &TxKind) -> TransactTo {
+        fn transact_to(kind: &TxKind) -> TxKind {
             match kind {
-                TxKind::Call(c) => TransactTo::Call(*c),
-                TxKind::Create => TransactTo::Create,
+                TxKind::Call(c) => TxKind::Call(*c),
+                TxKind::Create => TxKind::Create,
             }
         }
 
@@ -541,7 +542,7 @@ impl PendingTransaction {
                 } = tx.tx().tx();
                 TxEnv {
                     caller,
-                    transact_to: TransactTo::call(*to),
+                    transact_to: TxKind::Call(*to),
                     data: input.clone(),
                     chain_id: Some(*chain_id),
                     nonce: Some(*nonce),
@@ -593,7 +594,7 @@ impl PendingTransaction {
 }
 
 /// Container type for signed, typed transactions.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedTransaction {
     /// Legacy transaction type
     Legacy(Signed<TxLegacy>),
@@ -892,6 +893,103 @@ impl TypedTransaction {
     }
 }
 
+impl TryFrom<RpcTransaction> for TypedTransaction {
+    type Error = ConversionError;
+
+    fn try_from(tx: RpcTransaction) -> Result<Self, Self::Error> {
+        // TODO(sergerad): Handle Arbitrum system transactions?
+        match tx.transaction_type.unwrap_or_default().try_into()? {
+            TxType::Legacy => {
+                let legacy = TxLegacy {
+                    chain_id: tx.chain_id,
+                    nonce: tx.nonce,
+                    gas_price: tx.gas_price.ok_or(ConversionError::MissingGasPrice)?,
+                    gas_limit: tx.gas,
+                    value: tx.value,
+                    input: tx.input,
+                    to: tx.to.map_or(TxKind::Create, TxKind::Call),
+                };
+                let signature = tx
+                    .signature
+                    .ok_or(ConversionError::MissingSignature)?
+                    .try_into()
+                    .map_err(ConversionError::SignatureError)?;
+                Ok(Self::Legacy(Signed::new_unchecked(legacy, signature, tx.hash)))
+            }
+            TxType::Eip1559 => {
+                let eip1559 = TxEip1559 {
+                    chain_id: tx.chain_id.ok_or(ConversionError::MissingChainId)?,
+                    nonce: tx.nonce,
+                    max_fee_per_gas: tx
+                        .max_fee_per_gas
+                        .ok_or(ConversionError::MissingMaxFeePerGas)?,
+                    max_priority_fee_per_gas: tx
+                        .max_priority_fee_per_gas
+                        .ok_or(ConversionError::MissingMaxPriorityFeePerGas)?,
+                    gas_limit: tx.gas,
+                    value: tx.value,
+                    input: tx.input,
+                    to: tx.to.map_or(TxKind::Create, TxKind::Call),
+                    access_list: tx.access_list.ok_or(ConversionError::MissingAccessList)?,
+                };
+                let signature = tx
+                    .signature
+                    .ok_or(ConversionError::MissingSignature)?
+                    .try_into()
+                    .map_err(ConversionError::SignatureError)?;
+                Ok(Self::EIP1559(Signed::new_unchecked(eip1559, signature, tx.hash)))
+            }
+            TxType::Eip2930 => {
+                let eip2930 = TxEip2930 {
+                    chain_id: tx.chain_id.ok_or(ConversionError::MissingChainId)?,
+                    nonce: tx.nonce,
+                    gas_price: tx.gas_price.ok_or(ConversionError::MissingGasPrice)?,
+                    gas_limit: tx.gas,
+                    value: tx.value,
+                    input: tx.input,
+                    to: tx.to.map_or(TxKind::Create, TxKind::Call),
+                    access_list: tx.access_list.ok_or(ConversionError::MissingAccessList)?,
+                };
+                let signature = tx
+                    .signature
+                    .ok_or(ConversionError::MissingSignature)?
+                    .try_into()
+                    .map_err(ConversionError::SignatureError)?;
+                Ok(Self::EIP2930(Signed::new_unchecked(eip2930, signature, tx.hash)))
+            }
+            TxType::Eip4844 => {
+                let eip4844 = TxEip4844 {
+                    chain_id: tx.chain_id.ok_or(ConversionError::MissingChainId)?,
+                    nonce: tx.nonce,
+                    gas_limit: tx.gas,
+                    max_fee_per_gas: tx.gas_price.ok_or(ConversionError::MissingGasPrice)?,
+                    max_priority_fee_per_gas: tx
+                        .max_priority_fee_per_gas
+                        .ok_or(ConversionError::MissingMaxPriorityFeePerGas)?,
+                    max_fee_per_blob_gas: tx
+                        .max_fee_per_blob_gas
+                        .ok_or(ConversionError::MissingMaxFeePerBlobGas)?,
+                    to: tx.to.ok_or(ConversionError::MissingTo)?,
+                    value: tx.value,
+                    access_list: tx.access_list.ok_or(ConversionError::MissingAccessList)?,
+                    blob_versioned_hashes: tx
+                        .blob_versioned_hashes
+                        .ok_or(ConversionError::MissingBlobVersionedHashes)?,
+                    input: tx.input,
+                };
+                Ok(Self::EIP4844(Signed::new_unchecked(
+                    TxEip4844Variant::TxEip4844(eip4844),
+                    tx.signature
+                        .ok_or(ConversionError::MissingSignature)?
+                        .try_into()
+                        .map_err(ConversionError::SignatureError)?,
+                    tx.hash,
+                )))
+            }
+        }
+    }
+}
+
 impl Encodable for TypedTransaction {
     fn encode(&self, out: &mut dyn bytes::BufMut) {
         match self {
@@ -918,7 +1016,7 @@ impl Decodable for TypedTransaction {
 
         // Legacy TX
         if header.list {
-            return Ok(TxEnvelope::decode(buf)?.into())
+            return Ok(TxEnvelope::decode(buf)?.into());
         }
 
         // Check byte after header
@@ -964,7 +1062,7 @@ impl Encodable2718 for TypedTransaction {
 impl Decodable2718 for TypedTransaction {
     fn typed_decode(ty: u8, buf: &mut &[u8]) -> Result<Self, Eip2718Error> {
         if ty == 0x7E {
-            return Ok(Self::Deposit(DepositTransaction::decode(buf)?))
+            return Ok(Self::Deposit(DepositTransaction::decode(buf)?));
         }
         match TxEnvelope::typed_decode(ty, buf)? {
             TxEnvelope::Eip2930(tx) => Ok(Self::EIP2930(tx)),
@@ -1147,6 +1245,37 @@ impl<T> TypedReceipt<T> {
     }
 }
 
+impl<T> From<TypedReceipt<T>> for ReceiptWithBloom<T> {
+    fn from(value: TypedReceipt<T>) -> Self {
+        match value {
+            TypedReceipt::Legacy(r) |
+            TypedReceipt::EIP1559(r) |
+            TypedReceipt::EIP2930(r) |
+            TypedReceipt::EIP4844(r) => r,
+            TypedReceipt::Deposit(r) => r.inner,
+        }
+    }
+}
+
+impl From<TypedReceipt<alloy_rpc_types::Log>> for OtsReceipt {
+    fn from(value: TypedReceipt<alloy_rpc_types::Log>) -> Self {
+        let r#type = match value {
+            TypedReceipt::Legacy(_) => 0x00,
+            TypedReceipt::EIP2930(_) => 0x01,
+            TypedReceipt::EIP1559(_) => 0x02,
+            TypedReceipt::EIP4844(_) => 0x03,
+            TypedReceipt::Deposit(_) => 0x7E,
+        } as u8;
+        let receipt = ReceiptWithBloom::<alloy_rpc_types::Log>::from(value);
+        let status = receipt.status();
+        let cumulative_gas_used = receipt.cumulative_gas_used() as u64;
+        let logs = receipt.receipt.logs.into_iter().map(|x| x.inner).collect();
+        let logs_bloom = receipt.logs_bloom;
+
+        Self { status, cumulative_gas_used, logs: Some(logs), logs_bloom: Some(logs_bloom), r#type }
+    }
+}
+
 impl TypedReceipt {
     pub fn cumulative_gas_used(&self) -> u128 {
         self.as_receipt_with_bloom().cumulative_gas_used()
@@ -1297,7 +1426,7 @@ impl Encodable2718 for TypedReceipt {
 impl Decodable2718 for TypedReceipt {
     fn typed_decode(ty: u8, buf: &mut &[u8]) -> Result<Self, Eip2718Error> {
         if ty == 0x7E {
-            return Ok(Self::Deposit(DepositReceipt::decode(buf)?))
+            return Ok(Self::Deposit(DepositReceipt::decode(buf)?));
         }
         match ReceiptEnvelope::typed_decode(ty, buf)? {
             ReceiptEnvelope::Eip2930(tx) => Ok(Self::EIP2930(tx)),
@@ -1401,7 +1530,7 @@ mod tests {
         let signature = Signature::from_str("0eb96ca19e8a77102767a41fc85a36afd5c61ccb09911cec5d3e86e193d9c5ae3a456401896b1b6055311536bf00a718568c744d8c1f9df59879e8350220ca182b").unwrap();
 
         let tx = TypedTransaction::Legacy(Signed::new_unchecked(
-            tx.clone(),
+            tx,
             signature,
             b256!("a517b206d2223278f860ea017d3626cacad4f52ff51030dc9a96b432f17f8d34"),
         ));

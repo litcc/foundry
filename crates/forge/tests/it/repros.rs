@@ -278,7 +278,7 @@ test_repro!(6501, false, None, |res| {
         assert_eq!(trace.depth, 1);
         assert!(trace.success);
         assert_eq!(
-            decoded.func,
+            decoded.call_data,
             Some(DecodedCallData {
                 signature: expected.0.into(),
                 args: expected.1.into_iter().map(ToOwned::to_owned).collect(),
@@ -342,3 +342,9 @@ test_repro!(2851, false, None, |res| {
 
 // https://github.com/foundry-rs/foundry/issues/8006
 test_repro!(8006);
+
+// https://github.com/foundry-rs/foundry/issues/8277
+test_repro!(8277);
+
+// https://github.com/foundry-rs/foundry/issues/8287
+test_repro!(8287);

@@ -430,6 +430,11 @@ interface Vm {
     #[cheatcode(group = Evm, safety = Safe)]
     function getBlobBaseFee() external view returns (uint256 blobBaseFee);
 
+    /// Set blockhash for the current block.
+    /// It only sets the blockhash for blocks where `block.number - 256 <= number < block.number`.
+    #[cheatcode(group = Evm, safety = Unsafe)]
+    function setBlockhash(uint256 blockNumber, bytes32 blockHash) external;
+
     // -------- Account State --------
 
     /// Sets an address' balance.
@@ -610,6 +615,12 @@ interface Vm {
     /// Performs an Ethereum JSON-RPC request to the current fork URL.
     #[cheatcode(group = Evm, safety = Safe)]
     function rpc(string calldata method, string calldata params) external returns (bytes memory data);
+
+    /// Performs an Ethereum JSON-RPC request to the given endpoint.
+    #[cheatcode(group = Evm, safety = Safe)]
+    function rpc(string calldata urlOrAlias, string calldata method, string calldata params)
+        external
+        returns (bytes memory data);
 
     /// Gets all the logs according to specified filter.
     #[cheatcode(group = Evm, safety = Safe)]
@@ -1474,6 +1485,18 @@ interface Vm {
     #[cheatcode(group = Filesystem)]
     function getCode(string calldata artifactPath) external view returns (bytes memory creationBytecode);
 
+    /// Deploys a contract from an artifact file. Takes in the relative path to the json file or the path to the
+    /// artifact in the form of <path>:<contract>:<version> where <contract> and <version> parts are optional.
+    #[cheatcode(group = Filesystem)]
+    function deployCode(string calldata artifactPath) external returns (address deployedAddress);
+
+    /// Deploys a contract from an artifact file. Takes in the relative path to the json file or the path to the
+    /// artifact in the form of <path>:<contract>:<version> where <contract> and <version> parts are optional.
+    ///
+    /// Additionaly accepts abi-encoded constructor arguments.
+    #[cheatcode(group = Filesystem)]
+    function deployCode(string calldata artifactPath, bytes calldata constructorArgs) external returns (address deployedAddress);
+
     /// Gets the deployed bytecode from an artifact file. Takes in the relative path to the json file or the path to the
     /// artifact in the form of <path>:<contract>:<version> where <contract> and <version> parts are optional.
     #[cheatcode(group = Filesystem)]
@@ -2148,7 +2171,7 @@ interface Vm {
     #[cheatcode(group = Utilities)]
     function randomUint() external returns (uint256);
 
-    /// Returns random uin256 value between the provided range (min..=max).
+    /// Returns random uin256 value between the provided range (=min..=max).
     #[cheatcode(group = Utilities)]
     function randomUint(uint256 min, uint256 max) external returns (uint256);
 

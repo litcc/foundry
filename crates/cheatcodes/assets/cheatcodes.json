@@ -3553,6 +3553,46 @@
     },
     {
       "func": {
+        "id": "deployCode_0",
+        "description": "Deploys a contract from an artifact file. Takes in the relative path to the json file or the path to the\nartifact in the form of <path>:<contract>:<version> where <contract> and <version> parts are optional.",
+        "declaration": "function deployCode(string calldata artifactPath) external returns (address deployedAddress);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "deployCode(string)",
+        "selector": "0x9a8325a0",
+        "selectorBytes": [
+          154,
+          131,
+          37,
+          160
+        ]
+      },
+      "group": "filesystem",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "deployCode_1",
+        "description": "Deploys a contract from an artifact file. Takes in the relative path to the json file or the path to the\nartifact in the form of <path>:<contract>:<version> where <contract> and <version> parts are optional.\nAdditionaly accepts abi-encoded constructor arguments.",
+        "declaration": "function deployCode(string calldata artifactPath, bytes calldata constructorArgs) external returns (address deployedAddress);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "deployCode(string,bytes)",
+        "selector": "0x29ce9dde",
+        "selectorBytes": [
+          41,
+          206,
+          157,
+          222
+        ]
+      },
+      "group": "filesystem",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
         "id": "deriveKey_0",
         "description": "Derive a private key from a provided mnenomic string (or mnenomic file path)\nat the derivation path `m/44'/60'/0'/0/{index}`.",
         "declaration": "function deriveKey(string calldata mnemonic, uint32 index) external pure returns (uint256 privateKey);",
@@ -6454,7 +6494,7 @@
     {
       "func": {
         "id": "randomUint_1",
-        "description": "Returns random uin256 value between the provided range (min..=max).",
+        "description": "Returns random uin256 value between the provided range (=min..=max).",
         "declaration": "function randomUint(uint256 min, uint256 max) external returns (uint256);",
         "visibility": "external",
         "mutability": "",
@@ -6973,26 +7013,6 @@
     },
     {
       "func": {
-        "id": "rpc",
-        "description": "Performs an Ethereum JSON-RPC request to the current fork URL.",
-        "declaration": "function rpc(string calldata method, string calldata params) external returns (bytes memory data);",
-        "visibility": "external",
-        "mutability": "",
-        "signature": "rpc(string,string)",
-        "selector": "0x1206c8a8",
-        "selectorBytes": [
-          18,
-          6,
-          200,
-          168
-        ]
-      },
-      "group": "evm",
-      "status": "stable",
-      "safety": "safe"
-    },
-    {
-      "func": {
         "id": "rpcUrl",
         "description": "Returns the RPC url for the given alias.",
         "declaration": "function rpcUrl(string calldata rpcAlias) external view returns (string memory json);",
@@ -7048,6 +7068,46 @@
         ]
       },
       "group": "testing",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "rpc_0",
+        "description": "Performs an Ethereum JSON-RPC request to the current fork URL.",
+        "declaration": "function rpc(string calldata method, string calldata params) external returns (bytes memory data);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "rpc(string,string)",
+        "selector": "0x1206c8a8",
+        "selectorBytes": [
+          18,
+          6,
+          200,
+          168
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "rpc_1",
+        "description": "Performs an Ethereum JSON-RPC request to the given endpoint.",
+        "declaration": "function rpc(string calldata urlOrAlias, string calldata method, string calldata params) external returns (bytes memory data);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "rpc(string,string,string)",
+        "selector": "0x0199a220",
+        "selectorBytes": [
+          1,
+          153,
+          162,
+          32
+        ]
+      },
+      "group": "evm",
       "status": "stable",
       "safety": "safe"
     },
@@ -7390,6 +7450,26 @@
       "group": "json",
       "status": "stable",
       "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "setBlockhash",
+        "description": "Set blockhash for the current block.\nIt only sets the blockhash for blocks where `block.number - 256 <= number < block.number`.",
+        "declaration": "function setBlockhash(uint256 blockNumber, bytes32 blockHash) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "setBlockhash(uint256,bytes32)",
+        "selector": "0x5314b54a",
+        "selectorBytes": [
+          83,
+          20,
+          181,
+          74
+        ]
+      },
+      "group": "evm",
+      "status": "stable",
+      "safety": "unsafe"
     },
     {
       "func": {

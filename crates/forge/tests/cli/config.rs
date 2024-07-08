@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256};
 use foundry_cli::utils as forge_utils;
 use foundry_compilers::{
     artifacts::{BytecodeHash, OptimizerDetails, RevertStrings, YulDetails},
-    Solc,
+    solc::Solc,
 };
 use foundry_config::{
     cache::{CachedChains, CachedEndpoints, StorageCachingConfig},
@@ -13,7 +13,7 @@ use foundry_config::{
 };
 use foundry_evm::opts::EvmOpts;
 use foundry_test_utils::{
-    foundry_compilers::{remappings::Remapping, EvmVersion},
+    foundry_compilers::artifacts::{remappings::Remapping, EvmVersion},
     util::{pretty_err, OutputExt, TestCommand, OTHER_SOLC_VERSION},
 };
 use path_slash::PathBufExt;
@@ -64,6 +64,10 @@ forgetest!(can_extract_config_values, |prj, cmd| {
         contract_pattern_inverse: None,
         path_pattern: None,
         path_pattern_inverse: None,
+        coverage_pattern_inverse: None,
+        test_failures_file: "test-cache/test-failures".into(),
+        threads: None,
+        show_progress: false,
         fuzz: FuzzConfig {
             runs: 1000,
             max_test_rejects: 100203,
@@ -139,6 +143,8 @@ forgetest!(can_extract_config_values, |prj, cmd| {
         skip: vec![],
         dependencies: Default::default(),
         warnings: vec![],
+        assertions_revert: true,
+        legacy_assertions: false,
         _non_exhaustive: (),
     };
     prj.write_config(input.clone());

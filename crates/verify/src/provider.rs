@@ -9,7 +9,8 @@ use foundry_common::compile::ProjectCompiler;
 use foundry_compilers::{
     artifacts::{output_selection::OutputSelection, Metadata, Source},
     compilers::{multi::MultiCompilerParsedSource, solc::SolcCompiler, CompilerSettings},
-    Graph, Project, Solc,
+    solc::Solc,
+    Graph, Project,
 };
 use foundry_config::Config;
 use semver::Version;
@@ -54,7 +55,7 @@ impl VerificationContext {
             .compile(&project)?;
 
         let artifact = output
-            .find(self.target_path.to_string_lossy(), &self.target_name)
+            .find(&self.target_path, &self.target_name)
             .ok_or_eyre("failed to find target artifact when compiling for abi")?;
 
         artifact.abi.clone().ok_or_eyre("target artifact does not have an ABI")
@@ -73,7 +74,7 @@ impl VerificationContext {
             .compile(&project)?;
 
         let artifact = output
-            .find(self.target_path.to_string_lossy(), &self.target_name)
+            .find(&self.target_path, &self.target_name)
             .ok_or_eyre("failed to find target artifact when compiling for metadata")?;
 
         artifact.metadata.clone().ok_or_eyre("target artifact does not have an ABI")
