@@ -19,7 +19,6 @@ use foundry_evm_core::{
         CALLER, CHEATCODE_ADDRESS, CHEATCODE_CONTRACT_HASH, DEFAULT_CREATE2_DEPLOYER,
         DEFAULT_CREATE2_DEPLOYER_CODE, DEFAULT_CREATE2_DEPLOYER_DEPLOYER,
     },
-    debug::DebugArena,
     decode::RevertDecoder,
     utils::StateChangeset,
 };
@@ -46,7 +45,7 @@ pub mod invariant;
 pub use invariant::InvariantExecutor;
 
 mod trace;
-pub use trace::TracingExecutor;
+use crate::inspectors::customizable::Customizable;
 pub use trace::TracingExecutor;
 
 sol! {
@@ -857,8 +856,15 @@ fn convert_executed_result(
         _ => Bytes::new(),
     };
 
-    let InspectorData { mut logs, labels, traces, coverage, cheatcodes, chisel_state ,customizable} =
-        inspector.collect();
+    let InspectorData {
+        mut logs,
+        labels,
+        traces,
+        coverage,
+        cheatcodes,
+        chisel_state,
+        customizable,
+    } = inspector.collect();
 
     if logs.is_empty() {
         logs = exec_logs;

@@ -443,7 +443,10 @@ impl InspectorStack {
     pub fn collect(self) -> InspectorData {
         let Self {
             cheatcodes,
-            inner: InspectorStackInner { chisel_state, coverage, log_collector, tracer, .. },
+            inner:
+                InspectorStackInner {
+                    chisel_state, coverage, log_collector, tracer, customizable, ..
+                },
         } = self;
 
         InspectorData {
@@ -456,7 +459,7 @@ impl InspectorStack {
             coverage: coverage.map(|coverage| coverage.maps),
             cheatcodes,
             chisel_state: chisel_state.and_then(|state| state.state),
-            customizable: self.customizable,
+            customizable,
         }
     }
 
@@ -494,7 +497,13 @@ impl<'a> InspectorStackRefMut<'a> {
         let result = outcome.result.result;
         call_inspectors_adjust_depth!(
             #[ret]
-            [&mut self.customizable, &mut self.fuzzer, &mut self.tracer, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.fuzzer,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.printer
+            ],
             |inspector| {
                 let new_outcome = inspector.call_end(ecx, inputs, outcome.clone());
 
@@ -672,7 +681,6 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn step_end(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<DB>) {
         call_inspectors_adjust_depth!(
-            #[no_ret]
             [&mut self.tracer, &mut self.cheatcodes, &mut self.chisel_state, &mut self.printer],
             |inspector| inspector.step_end(interpreter, ecx),
             self,
@@ -682,7 +690,6 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn log(&mut self, ecx: &mut EvmContext<DB>, log: &Log) {
         call_inspectors_adjust_depth!(
-            #[no_ret]
             [&mut self.tracer, &mut self.log_collector, &mut self.cheatcodes, &mut self.printer],
             |inspector| inspector.log(ecx, log),
             self,
@@ -698,7 +705,13 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
         call_inspectors_adjust_depth!(
             #[ret]
-            [&mut self.customizable, &mut self.fuzzer, &mut self.tracer, &mut self.log_collector, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.fuzzer,
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.printer
+            ],
             |inspector| {
                 let mut out = None;
                 if let Some(output) = inspector.call(ecx, call) {
@@ -911,9 +924,10 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
     }
 
     fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        call_inspectors!([&mut self.customizable, &mut self.tracer, &mut self.printer], |inspector| {
-            Inspector::<DB>::selfdestruct(inspector, contract, target, value)
-        });
+        call_inspectors!(
+            [&mut self.customizable, &mut self.tracer, &mut self.printer],
+            |inspector| { Inspector::<DB>::selfdestruct(inspector, contract, target, value) }
+        );
     }
 }
 
