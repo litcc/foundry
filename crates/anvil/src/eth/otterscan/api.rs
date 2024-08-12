@@ -44,27 +44,35 @@ pub fn mentions_address(trace: LocalizedTransactionTrace, address: Address) -> O
 pub fn batch_build_ots_traces(traces: Vec<LocalizedTransactionTrace>) -> Vec<TraceEntry> {
     traces
         .into_iter()
-        .filter_map(|trace| match trace.trace.action {
-            Action::Call(call) => {
-                let ots_type = match call.call_type {
-                    CallType::Call => "CALL",
-                    CallType::CallCode => "CALLCODE",
-                    CallType::DelegateCall => "DELEGATECALL",
-                    CallType::StaticCall => "STATICCALL",
-                    CallType::AuthCall => "AUTHCALL",
-                    CallType::None => "NONE",
-                }
-                .to_string();
-                Some(TraceEntry {
-                    r#type: ots_type,
+        .filter_map(|trace| {
+            let output = trace
+                .trace
+                .result
+                .map(|r| match r {
+                    TraceOutput::Call(output) => output.output,
+                    TraceOutput::Create(output) => output.code,
+                })
+                .unwrap_or_default();
+            match trace.trace.action {
+                Action::Call(call) => Some(TraceEntry {
+                    r#type: match call.call_type {
+                        CallType::Call => "CALL",
+                        CallType::CallCode => "CALLCODE",
+                        CallType::DelegateCall => "DELEGATECALL",
+                        CallType::StaticCall => "STATICCALL",
+                        CallType::AuthCall => "AUTHCALL",
+                        CallType::None => "NONE",
+                    }
+                    .to_string(),
                     depth: trace.trace.trace_address.len() as u32,
                     from: call.from,
                     to: call.to,
                     value: call.value,
-                    input: call.input.0.into(),
-                })
+                    input: call.input,
+                    output,
+                }),
+                Action::Create(_) | Action::Selfdestruct(_) | Action::Reward(_) => None,
             }
-            Action::Create(_) | Action::Selfdestruct(_) | Action::Reward(_) => None,
         })
         .collect()
 }
@@ -307,14 +315,10 @@ impl EthApi {
                             Action::Create(CreateAction { from, .. }),
                             Some(TraceOutput::Create(CreateOutput { address, .. })),
                         ) if address == addr => {
-                            let tx = self
-                                .backend
-                                .transaction_by_hash(trace.transaction_hash.unwrap())
-                                .await
-                                .unwrap()
-                                .unwrap()
-                                .inner;
-                            return Ok(Some(ContractCreator { tx, creator: from }));
+                            return Ok(Some(ContractCreator {
+                                hash: trace.transaction_hash.unwrap(),
+                                creator: from,
+                            }));
                         }
                         _ => {}
                     }
@@ -345,8 +349,10 @@ impl EthApi {
         if block.transactions.is_uncle() {
             return Err(BlockchainError::DataUnavailable);
         }
-        let receipts_futs =
-            block.transactions.hashes().map(|hash| async { self.transaction_receipt(*hash).await });
+        let receipts_futs = block
+            .transactions
+            .hashes()
+            .map(|hash| async move { self.transaction_receipt(hash).await });
 
         // fetch all receipts
         let receipts = join_all(receipts_futs)
@@ -394,7 +400,7 @@ impl EthApi {
             BlockTransactions::Uncle => unreachable!(),
         };
 
-        let receipt_futs = block.transactions.hashes().map(|hash| self.transaction_receipt(*hash));
+        let receipt_futs = block.transactions.hashes().map(|hash| self.transaction_receipt(hash));
 
         let receipts = join_all(receipt_futs)
             .await

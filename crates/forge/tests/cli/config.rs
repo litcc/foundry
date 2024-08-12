@@ -74,6 +74,7 @@ forgetest!(can_extract_config_values, |prj, cmd| {
             seed: Some(U256::from(1000)),
             failure_persist_dir: Some("test-cache/fuzz".into()),
             failure_persist_file: Some("failures".to_string()),
+            show_logs: false,
             ..Default::default()
         },
         invariant: InvariantConfig {
@@ -106,7 +107,7 @@ forgetest!(can_extract_config_values, |prj, cmd| {
         etherscan_api_key: None,
         etherscan: Default::default(),
         verbosity: 4,
-        remappings: vec![Remapping::from_str("forge-std=lib/forge-std/").unwrap().into()],
+        remappings: vec![Remapping::from_str("forge-std/=lib/forge-std/").unwrap().into()],
         libraries: vec![
             "src/DssSpell.sol:DssExecLib:0x8De6DDbCd5053d32292AAA0D2105A32d108484a6".to_string()
         ],
@@ -133,9 +134,9 @@ forgetest!(can_extract_config_values, |prj, cmd| {
         build_info_path: None,
         fmt: Default::default(),
         doc: Default::default(),
+        bind_json: Default::default(),
         fs_permissions: Default::default(),
         labels: Default::default(),
-        prague: true,
         isolate: true,
         unchecked_cheatcode_artifacts: false,
         create2_library_salt: Config::DEFAULT_CREATE2_LIBRARY_SALT,
@@ -145,6 +146,8 @@ forgetest!(can_extract_config_values, |prj, cmd| {
         warnings: vec![],
         assertions_revert: true,
         legacy_assertions: false,
+        extra_args: vec![],
+        eof_version: None,
         _non_exhaustive: (),
     };
     prj.write_config(input.clone());

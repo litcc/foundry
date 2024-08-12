@@ -16,11 +16,12 @@ use figment::{
     value::{Dict, Map, Value},
     Error, Figment, Metadata, Profile, Provider,
 };
+use filter::GlobMatcher;
 use foundry_compilers::{
     artifacts::{
         output_selection::{ContractOutputSelection, OutputSelection},
         remappings::{RelativeRemapping, Remapping},
-        serde_helpers, BytecodeHash, DebuggingSettings, EvmVersion, Libraries,
+        serde_helpers, BytecodeHash, DebuggingSettings, EofVersion, EvmVersion, Libraries,
         ModelCheckerSettings, ModelCheckerTarget, Optimizer, OptimizerDetails, RevertStrings,
         Settings, SettingsMetadata, Severity,
     },
@@ -32,6 +33,7 @@ use foundry_compilers::{
         Compiler,
     },
     error::SolcError,
+    solc::{CliSettings, SolcSettings},
     ConfigurableArtifacts, Project, ProjectPathsConfig, VyperLanguage,
 };
 use inflector::Inflector;
@@ -110,6 +112,9 @@ use soldeer::SoldeerConfig;
 mod vyper;
 use vyper::VyperConfig;
 
+mod bind_json;
+use bind_json::BindJsonConfig;
+
 /// Foundry configuration
 ///
 /// # Defaults
@@ -178,8 +183,7 @@ pub struct Config {
     /// additional solc include paths for `--include-path`
     pub include_paths: Vec<PathBuf>,
     /// glob patterns to skip
-    #[serde(with = "from_vec_glob")]
-    pub skip: Vec<globset::Glob>,
+    pub skip: Vec<GlobMatcher>,
     /// whether to force a `project.clean()`
     pub force: bool,
     /// evm version to use
@@ -389,15 +393,12 @@ pub struct Config {
     pub fmt: FormatterConfig,
     /// Configuration for `forge doc`
     pub doc: DocConfig,
+    /// Configuration for `forge bind-json`
+    pub bind_json: BindJsonConfig,
     /// Configures the permissions of cheat codes that touch the file system.
     ///
     /// This includes what operations can be executed (read, write)
     pub fs_permissions: FsPermissions,
-
-    /// Temporary config to enable [SpecId::PRAGUE]
-    ///
-    /// Should be removed once EvmVersion Prague is supported by solc
-    pub prague: bool,
 
     /// Whether to enable call isolation.
     ///
@@ -437,6 +438,14 @@ pub struct Config {
 
     /// Whether `failed()` should be invoked to check if the test have failed.
     pub legacy_assertions: bool,
+
+    /// Optional additional CLI arguments to pass to `solc` binary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_args: Vec<String>,
+
+    /// Optional EOF version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eof_version: Option<EofVersion>,
 
     /// Warnings gathered when loading the Config. See [`WarningsProvider`] for more information
     #[serde(rename = "__warnings", default, skip_serializing)]
@@ -484,6 +493,7 @@ impl Config {
         "labels",
         "dependencies",
         "vyper",
+        "bind_json",
     ];
 
     /// File name of config toml file
@@ -900,9 +910,6 @@ impl Config {
     /// Returns the [SpecId] derived from the configured [EvmVersion]
     #[inline]
     pub fn evm_spec_id(&self) -> SpecId {
-        if self.prague {
-            return SpecId::PRAGUE
-        }
         evm_spec_id(&self.evm_version)
     }
 
@@ -1271,7 +1278,7 @@ impl Config {
     /// - all libraries
     /// - the optimizer (including details, if configured)
     /// - evm version
-    pub fn solc_settings(&self) -> Result<Settings, SolcError> {
+    pub fn solc_settings(&self) -> Result<SolcSettings, SolcError> {
         // By default if no targets are specifically selected the model checker uses all targets.
         // This might be too much here, so only enable assertion checks.
         // If users wish to enable all options they need to do so explicitly.
@@ -1304,6 +1311,7 @@ impl Config {
             remappings: Vec::new(),
             // Set with `with_extra_output` below.
             output_selection: Default::default(),
+            eof_version: self.eof_version,
         }
         .with_extra_output(self.configured_artifacts_handler().output_selection());
 
@@ -1312,7 +1320,10 @@ impl Config {
             settings = settings.with_ast();
         }
 
-        Ok(settings)
+        let cli_settings =
+            CliSettings { extra_args: self.extra_args.clone(), ..Default::default() };
+
+        Ok(SolcSettings { settings, cli_settings })
     }
 
     /// Returns the configured [VyperSettings] that includes:
@@ -1951,30 +1962,6 @@ pub(crate) mod from_opt_glob {
     }
 }
 
-/// Ser/de `globset::Glob` explicitly to handle `Option<Glob>` properly
-pub(crate) mod from_vec_glob {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(value: &[globset::Glob], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let value = value.iter().map(|g| g.glob()).collect::<Vec<_>>();
-        value.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<globset::Glob>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s: Vec<String> = Vec::deserialize(deserializer)?;
-        s.into_iter()
-            .map(|s| globset::Glob::new(&s))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(serde::de::Error::custom)
-    }
-}
-
 /// A helper wrapper around the root path used during Config detection
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -2047,7 +2034,6 @@ impl Default for Config {
         Self {
             profile: Self::DEFAULT_PROFILE,
             fs_permissions: FsPermissions::new([PathPermission::read("out")]),
-            prague: false,
             #[cfg(not(feature = "isolate-by-default"))]
             isolate: false,
             #[cfg(feature = "isolate-by-default")]
@@ -2142,6 +2128,7 @@ impl Default for Config {
             build_info_path: None,
             fmt: Default::default(),
             doc: Default::default(),
+            bind_json: Default::default(),
             labels: Default::default(),
             unchecked_cheatcode_artifacts: false,
             create2_library_salt: Self::DEFAULT_CREATE2_LIBRARY_SALT,
@@ -2150,6 +2137,8 @@ impl Default for Config {
             assertions_revert: true,
             legacy_assertions: false,
             warnings: vec![],
+            extra_args: vec![],
+            eof_version: None,
             _non_exhaustive: (),
         }
     }
@@ -2810,6 +2799,7 @@ mod tests {
         endpoints::{RpcEndpointConfig, RpcEndpointType},
         etherscan::ResolvedEtherscanConfigs,
     };
+    use endpoints::RpcAuth;
     use figment::error::Kind::InvalidType;
     use foundry_compilers::artifacts::{
         vyper::VyperOptimizationMode, ModelCheckerEngine, YulDetails,
@@ -3460,6 +3450,7 @@ mod tests {
                             retries: Some(3),
                             retry_backoff: Some(1000),
                             compute_units_per_second: Some(1000),
+                            auth: None,
                         })
                     ),
                 ]),
@@ -3480,6 +3471,76 @@ mod tests {
             );
             Ok(())
         })
+    }
+
+    #[test]
+    fn test_resolve_auth() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                "foundry.toml",
+                r#"
+                [profile.default]
+                eth_rpc_url = "optimism"
+                [rpc_endpoints]
+                optimism = "https://example.com/"
+                mainnet = { endpoint = "${_CONFIG_MAINNET}", retries = 3, retry_backoff = 1000, compute_units_per_second = 1000, auth = "Bearer ${_CONFIG_AUTH}" }
+            "#,
+            )?;
+
+            let config = Config::load();
+
+            jail.set_env("_CONFIG_AUTH", "123456");
+            jail.set_env("_CONFIG_MAINNET", "https://eth-mainnet.alchemyapi.io/v2/123455");
+
+            assert_eq!(
+                RpcEndpoints::new([
+                    (
+                        "optimism",
+                        RpcEndpointType::String(RpcEndpoint::Url(
+                            "https://example.com/".to_string()
+                        ))
+                    ),
+                    (
+                        "mainnet",
+                        RpcEndpointType::Config(RpcEndpointConfig {
+                            endpoint: RpcEndpoint::Env("${_CONFIG_MAINNET}".to_string()),
+                            retries: Some(3),
+                            retry_backoff: Some(1000),
+                            compute_units_per_second: Some(1000),
+                            auth: Some(RpcAuth::Env("Bearer ${_CONFIG_AUTH}".to_string())),
+                        })
+                    ),
+                ]),
+                config.rpc_endpoints
+            );
+            let resolved = config.rpc_endpoints.resolved();
+            assert_eq!(
+                RpcEndpoints::new([
+                    (
+                        "optimism",
+                        RpcEndpointType::String(RpcEndpoint::Url(
+                            "https://example.com/".to_string()
+                        ))
+                    ),
+                    (
+                        "mainnet",
+                        RpcEndpointType::Config(RpcEndpointConfig {
+                            endpoint: RpcEndpoint::Url(
+                                "https://eth-mainnet.alchemyapi.io/v2/123455".to_string()
+                            ),
+                            retries: Some(3),
+                            retry_backoff: Some(1000),
+                            compute_units_per_second: Some(1000),
+                            auth: Some(RpcAuth::Raw("Bearer 123456".to_string())),
+                        })
+                    ),
+                ])
+                .resolved(),
+                resolved
+            );
+
+            Ok(())
+        });
     }
 
     #[test]

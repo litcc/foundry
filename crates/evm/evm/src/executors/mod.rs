@@ -23,7 +23,7 @@ use foundry_evm_core::{
     utils::StateChangeset,
 };
 use foundry_evm_coverage::HitMaps;
-use foundry_evm_traces::CallTraceArena;
+use foundry_evm_traces::{CallTraceArena, TraceMode};
 use revm::{
     db::{DatabaseCommit, DatabaseRef},
     interpreter::{return_ok, InstructionResult},
@@ -52,6 +52,9 @@ sol! {
     interface ITest {
         function setUp() external;
         function failed() external view returns (bool failed);
+
+        #[derive(Default)]
+        function beforeTestSetup(bytes4 testSelector) public view returns (bytes[] memory beforeTestCalldata);
     }
 }
 
@@ -216,8 +219,8 @@ impl Executor {
     }
 
     #[inline]
-    pub fn set_tracing(&mut self, tracing: bool, debug: bool) -> &mut Self {
-        self.inspector_mut().tracing(tracing, debug);
+    pub fn set_tracing(&mut self, mode: TraceMode) -> &mut Self {
+        self.inspector_mut().tracing(mode);
         self
     }
 
@@ -604,6 +607,16 @@ impl Executor {
 
         EnvWithHandlerCfg::new_with_spec_id(Box::new(env), self.spec_id())
     }
+
+    pub fn call_sol_default<C: SolCall>(&self, to: Address, args: &C) -> C::Return
+    where
+        C::Return: Default,
+    {
+        self.call_sol(CALLER, to, args, U256::ZERO, None)
+            .map(|c| c.decoded_result)
+            .inspect_err(|e| warn!(target: "forge::test", "failed calling {:?}: {e}", C::SIGNATURE))
+            .unwrap_or_default()
+    }
 }
 
 /// Represents the context after an execution error occurred.
@@ -849,6 +862,7 @@ fn convert_executed_result(
         &env.tx.data,
         env.tx.transact_to.is_create(),
         &env.tx.access_list,
+        0,
     );
 
     let result = match &out {

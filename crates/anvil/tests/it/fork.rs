@@ -4,8 +4,8 @@ use crate::{
     abi::{Greeter, ERC721},
     utils::{http_provider, http_provider_with_signer},
 };
-use alloy_network::{EthereumWallet, TransactionBuilder};
-use alloy_primitives::{address, bytes, Address, Bytes, TxHash, TxKind, U256};
+use alloy_network::{EthereumWallet, ReceiptResponse, TransactionBuilder};
+use alloy_primitives::{address, b256, bytes, Address, Bytes, TxHash, TxKind, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types::{
     anvil::Forking,
@@ -1015,12 +1015,18 @@ async fn test_block_receipts() {
     let (api, _) = spawn(fork_config()).await;
 
     // Receipts from the forked block (14608400)
-    let receipts = api.block_receipts(BlockNumberOrTag::Number(BLOCK_NUMBER)).await.unwrap();
+    let receipts = api.block_receipts(BlockNumberOrTag::Number(BLOCK_NUMBER).into()).await.unwrap();
     assert!(receipts.is_some());
 
     // Receipts from a block in the future (14608401)
-    let receipts = api.block_receipts(BlockNumberOrTag::Number(BLOCK_NUMBER + 1)).await.unwrap();
+    let receipts =
+        api.block_receipts(BlockNumberOrTag::Number(BLOCK_NUMBER + 1).into()).await.unwrap();
     assert!(receipts.is_none());
+
+    // Receipts from a block hash (14608400)
+    let hash = b256!("4c1c76f89cfe4eb503b09a0993346dd82865cac9d76034efc37d878c66453f0a");
+    let receipts = api.block_receipts(BlockId::Hash(hash.into())).await.unwrap();
+    assert!(receipts.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1165,6 +1171,11 @@ async fn test_arbitrum_fork_block_number() {
     let block_number = api.block_number().unwrap().to::<u64>();
     assert_eq!(block_number, initial_block_number + 1);
 
+    // test block by number API call returns proper block number and `l1BlockNumber` is set
+    let block_by_number = api.block_by_number(BlockNumberOrTag::Latest).await.unwrap().unwrap();
+    assert_eq!(block_by_number.header.number.unwrap(), initial_block_number + 1);
+    assert!(block_by_number.other.get("l1BlockNumber").is_some());
+
     // revert to recorded snapshot and check block number
     assert!(api.evm_revert(snapshot).await.unwrap());
     let block_number = api.block_number().unwrap().to::<u64>();
@@ -1279,4 +1290,67 @@ async fn test_immutable_fork_transaction_hash() {
             .unwrap();
         assert_eq!(tx.inner.hash.to_string(), expected.0.to_string());
     }
+}
+
+// <https://github.com/foundry-rs/foundry/issues/4700>
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fork_query_at_fork_block() {
+    let (api, handle) = spawn(fork_config()).await;
+    let provider = handle.http_provider();
+    let info = api.anvil_node_info().await.unwrap();
+    let number = info.fork_config.fork_block_number.unwrap();
+    assert_eq!(number, BLOCK_NUMBER);
+
+    let address = Address::random();
+
+    let balance = provider.get_balance(address).await.unwrap();
+    api.evm_mine(None).await.unwrap();
+    api.anvil_set_balance(address, balance + U256::from(1)).await.unwrap();
+
+    let balance_before =
+        provider.get_balance(address).block_id(BlockId::number(number)).await.unwrap();
+
+    assert_eq!(balance_before, balance);
+}
+
+// <https://github.com/foundry-rs/foundry/issues/4173>
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reset_dev_account_nonce() {
+    let config: NodeConfig = fork_config();
+    let address = config.genesis_accounts[0].address();
+    let (api, handle) = spawn(config).await;
+    let provider = handle.http_provider();
+    let info = api.anvil_node_info().await.unwrap();
+    let number = info.fork_config.fork_block_number.unwrap();
+    assert_eq!(number, BLOCK_NUMBER);
+
+    let nonce_before = provider.get_transaction_count(address).await.unwrap();
+
+    // Reset to older block with other nonce
+    api.anvil_reset(Some(Forking {
+        json_rpc_url: None,
+        block_number: Some(BLOCK_NUMBER - 1_000_000),
+    }))
+    .await
+    .unwrap();
+
+    let nonce_after = provider.get_transaction_count(address).await.unwrap();
+
+    assert!(nonce_before > nonce_after);
+
+    let receipt = provider
+        .send_transaction(WithOtherFields::new(
+            TransactionRequest::default()
+                .from(address)
+                .to(address)
+                .nonce(nonce_after)
+                .gas_limit(21000u128),
+        ))
+        .await
+        .unwrap()
+        .get_receipt()
+        .await
+        .unwrap();
+
+    assert!(receipt.status());
 }

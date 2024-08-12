@@ -113,6 +113,8 @@ pub struct NodeConfig {
     pub block_time: Option<Duration>,
     /// Disable auto, interval mining mode uns use `MiningMode::None` instead
     pub no_mining: bool,
+    /// Enables auto and interval mining mode
+    pub mixed_mining: bool,
     /// port to use for the server
     pub port: u16,
     /// maximum number of transactions in a block
@@ -165,6 +167,8 @@ pub struct NodeConfig {
     ///
     /// If set to `Some(num)` keep latest num state in memory only.
     pub prune_history: PruneStateHistoryConfig,
+    /// Max number of states cached on disk.
+    pub max_persisted_states: Option<usize>,
     /// The file where to load the state from
     pub init_state: Option<SerializableState>,
     /// max number of blocks with transactions in memory
@@ -395,6 +399,7 @@ impl Default for NodeConfig {
             genesis_balance: Unit::ETHER.wei().saturating_mul(U256::from(100u64)),
             block_time: None,
             no_mining: false,
+            mixed_mining: false,
             port: NODE_PORT,
             // TODO make this something dependent on block capacity
             max_transactions: 1_000,
@@ -424,6 +429,7 @@ impl Default for NodeConfig {
             ipc_path: None,
             code_size_limit: None,
             prune_history: Default::default(),
+            max_persisted_states: None,
             init_state: None,
             transaction_block_keeper: None,
             disable_default_create2_deployer: false,
@@ -474,6 +480,14 @@ impl NodeConfig {
     #[must_use]
     pub fn with_code_size_limit(mut self, code_size_limit: Option<usize>) -> Self {
         self.code_size_limit = code_size_limit;
+        self
+    }
+    /// Disables  code size limit
+    #[must_use]
+    pub fn disable_code_size_limit(mut self, disable_code_size_limit: bool) -> Self {
+        if disable_code_size_limit {
+            self.code_size_limit = Some(usize::MAX);
+        }
         self
     }
 
@@ -546,6 +560,16 @@ impl NodeConfig {
     #[must_use]
     pub fn set_pruned_history(mut self, prune_history: Option<Option<usize>>) -> Self {
         self.prune_history = PruneStateHistoryConfig::from_args(prune_history);
+        self
+    }
+
+    /// Sets max number of states to cache on disk.
+    #[must_use]
+    pub fn with_max_persisted_states<U: Into<usize>>(
+        mut self,
+        max_persisted_states: Option<U>,
+    ) -> Self {
+        self.max_persisted_states = max_persisted_states.map(Into::into);
         self
     }
 
@@ -630,6 +654,17 @@ impl NodeConfig {
     #[must_use]
     pub fn with_blocktime<D: Into<Duration>>(mut self, block_time: Option<D>) -> Self {
         self.block_time = block_time.map(Into::into);
+        self
+    }
+
+    #[must_use]
+    pub fn with_mixed_mining<D: Into<Duration>>(
+        mut self,
+        mixed_mining: bool,
+        block_time: Option<D>,
+    ) -> Self {
+        self.block_time = block_time.map(Into::into);
+        self.mixed_mining = mixed_mining;
         self
     }
 
@@ -947,7 +982,6 @@ impl NodeConfig {
             timestamp: self.get_genesis_timestamp(),
             balance: self.genesis_balance,
             accounts: self.genesis_accounts.iter().map(|acc| acc.address()).collect(),
-            fork_genesis_account_infos: Arc::new(Default::default()),
             genesis_init: self.genesis.clone(),
         };
 
@@ -961,6 +995,7 @@ impl NodeConfig {
             self.enable_steps_tracing,
             self.print_logs,
             self.prune_history,
+            self.max_persisted_states,
             self.transaction_block_keeper,
             self.block_time,
             Arc::new(tokio::sync::RwLock::new(self.clone())),
@@ -1020,10 +1055,10 @@ impl NodeConfig {
         let provider = Arc::new(
             ProviderBuilder::new(&eth_rpc_url)
                 .timeout(self.fork_request_timeout)
-                .timeout_retry(self.fork_request_retries)
+                // .timeout_retry(self.fork_request_retries)
                 .initial_backoff(self.fork_retry_backoff.as_millis() as u64)
                 .compute_units_per_second(self.compute_units_per_second)
-                .max_retry(10)
+                .max_retry(self.fork_request_retries)
                 .initial_backoff(1000)
                 .headers(self.fork_headers.clone())
                 .build()
@@ -1375,7 +1410,7 @@ impl AccountGenerator {
         let mut wallets = Vec::with_capacity(self.amount);
         for idx in 0..self.amount {
             let builder =
-                builder.clone().derivation_path(&format!("{derivation_path}{idx}")).unwrap();
+                builder.clone().derivation_path(format!("{derivation_path}{idx}")).unwrap();
             let wallet = builder.build().unwrap().with_chain_id(Some(self.chain_id));
             wallets.push(wallet)
         }

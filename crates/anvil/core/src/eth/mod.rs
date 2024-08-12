@@ -5,7 +5,10 @@ use alloy_rpc_types::{
     pubsub::{Params as SubscriptionParams, SubscriptionKind},
     request::TransactionRequest,
     state::StateOverride,
-    trace::geth::{GethDebugTracingOptions, GethDefaultTracingOptions},
+    trace::{
+        filter::TraceFilter,
+        geth::{GethDebugTracingCallOptions, GethDebugTracingOptions},
+    },
     BlockId, BlockNumberOrTag as BlockNumber, Filter, Index,
 };
 use alloy_serde::WithOtherFields;
@@ -82,6 +85,9 @@ pub enum EthRequest {
 
     #[cfg_attr(feature = "serde", serde(rename = "eth_getBalance"))]
     EthGetBalance(Address, Option<BlockId>),
+
+    #[cfg_attr(feature = "serde", serde(rename = "eth_getAccount"))]
+    EthGetAccount(Address, Option<BlockId>),
 
     #[cfg_attr(feature = "serde", serde(rename = "eth_getStorageAt"))]
     EthGetStorageAt(Address, U256, Option<BlockId>),
@@ -215,7 +221,7 @@ pub enum EthRequest {
     EthGetTransactionReceipt(B256),
 
     #[cfg_attr(feature = "serde", serde(rename = "eth_getBlockReceipts", with = "sequence"))]
-    EthGetBlockReceipts(BlockNumber),
+    EthGetBlockReceipts(BlockId),
 
     #[cfg_attr(feature = "serde", serde(rename = "eth_getUncleByBlockHashAndIndex"))]
     EthGetUncleByBlockHashAndIndex(B256, Index),
@@ -297,7 +303,7 @@ pub enum EthRequest {
     DebugTraceCall(
         WithOtherFields<TransactionRequest>,
         #[cfg_attr(feature = "serde", serde(default))] Option<BlockId>,
-        #[cfg_attr(feature = "serde", serde(default))] GethDefaultTracingOptions,
+        #[cfg_attr(feature = "serde", serde(default))] GethDebugTracingCallOptions,
     ),
 
     /// Trace transaction endpoint for parity's `trace_transaction`
@@ -313,6 +319,10 @@ pub enum EthRequest {
         )
     )]
     TraceBlock(BlockNumber),
+
+    // Return filtered traces over blocks
+    #[cfg_attr(feature = "serde", serde(rename = "trace_filter",))]
+    TraceFilter(TraceFilter),
 
     // Custom endpoints, they're not extracted to a separate type out of serde convenience
     /// send transactions impersonating specific account and contract addresses.

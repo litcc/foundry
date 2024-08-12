@@ -14,6 +14,7 @@ use foundry_evm::{
     executors::{DeployResult, EvmError, RawCallResult},
     opts::EvmOpts,
     traces::{
+        debug::DebugTraceIdentifier,
         decode_trace_arena,
         identifier::{EtherscanIdentifier, SignaturesIdentifier},
         render_trace_arena, CallTraceDecoder, CallTraceDecoderBuilder, TraceKind, Traces,
@@ -162,14 +163,22 @@ pub fn has_different_gas_calc(chain_id: u64) -> bool {
     if let Some(chain) = Chain::from(chain_id).named() {
         return matches!(
             chain,
-            NamedChain::Arbitrum |
-                NamedChain::ArbitrumTestnet |
+            NamedChain::Acala |
+                NamedChain::AcalaMandalaTestnet |
+                NamedChain::AcalaTestnet |
+                NamedChain::Arbitrum |
                 NamedChain::ArbitrumGoerli |
                 NamedChain::ArbitrumSepolia |
-                NamedChain::Moonbeam |
-                NamedChain::Moonriver |
+                NamedChain::ArbitrumTestnet |
+                NamedChain::Karura |
+                NamedChain::KaruraTestnet |
+                NamedChain::Mantle |
+                NamedChain::MantleSepolia |
+                NamedChain::MantleTestnet |
                 NamedChain::Moonbase |
-                NamedChain::MoonbeamDev
+                NamedChain::Moonbeam |
+                NamedChain::MoonbeamDev |
+                NamedChain::Moonriver
         );
     }
     false
@@ -351,6 +360,7 @@ pub async fn handle_traces(
     chain: Option<Chain>,
     labels: Vec<String>,
     debug: bool,
+    decode_internal: bool,
 ) -> Result<()> {
     let labels = labels.iter().filter_map(|label_str| {
         let mut iter = label_str.split(':');
@@ -376,6 +386,15 @@ pub async fn handle_traces(
         for (_, trace) in result.traces.as_deref_mut().unwrap_or_default() {
             decoder.identify(trace, etherscan_identifier);
         }
+    }
+
+    if decode_internal {
+        let sources = if let Some(etherscan_identifier) = &etherscan_identifier {
+            etherscan_identifier.get_compiled_contracts().await?
+        } else {
+            Default::default()
+        };
+        decoder.debug_identifier = Some(DebugTraceIdentifier::new(sources));
     }
 
     if debug {

@@ -43,7 +43,7 @@ use foundry_evm::{
         CheatsConfig,
     },
     opts::EvmOpts,
-    traces::Traces,
+    traces::{TraceMode, Traces},
 };
 use foundry_wallets::MultiWalletOpts;
 use serde::{Deserialize, Serialize};
@@ -169,7 +169,10 @@ pub struct ScriptArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Gas price for legacy transactions, or max fee per gas for EIP1559 transactions.
+    /// Gas price for legacy transactions, or max fee per gas for EIP1559 transactions, either
+    /// specified in wei, or as a string with a unit type.
+    ///
+    /// Examples: 1ether, 10gwei, 0.01ether
     #[arg(
         long,
         env = "ETH_GAS_PRICE",
@@ -195,7 +198,7 @@ pub struct ScriptArgs {
 }
 
 impl ScriptArgs {
-    async fn preprocess(self) -> Result<PreprocessedState> {
+    pub async fn preprocess(self) -> Result<PreprocessedState> {
         let script_wallets =
             ScriptWallets::new(self.wallets.get_multi_wallet().await?, self.evm_opts.sender);
 
@@ -386,11 +389,9 @@ impl ScriptArgs {
         for (data, to) in result.transactions.iter().flat_map(|txes| {
             txes.iter().filter_map(|tx| {
                 tx.transaction
-                    .input
-                    .clone()
-                    .into_input()
+                    .input()
                     .filter(|data| data.len() > max_size)
-                    .map(|data| (data, tx.transaction.to))
+                    .map(|data| (data, tx.transaction.to()))
             })
         }) {
             let mut offset = 0;
@@ -456,16 +457,19 @@ impl Provider for ScriptArgs {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 pub struct ScriptResult {
     pub success: bool,
+    #[serde(rename = "raw_logs")]
     pub logs: Vec<Log>,
     pub traces: Traces,
     pub gas_used: u64,
     pub labeled_addresses: HashMap<Address, String>,
+    #[serde(skip)]
     pub transactions: Option<BroadcastableTransactions>,
     pub returned: Bytes,
     pub address: Option<Address>,
+    #[serde(skip)]
     pub breakpoints: Breakpoints,
 }
 
@@ -489,11 +493,12 @@ impl ScriptResult {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct JsonResult {
+#[derive(Serialize)]
+struct JsonResult<'a> {
     logs: Vec<String>,
-    gas_used: u64,
-    returns: HashMap<String, NestedValue>,
+    returns: &'a HashMap<String, NestedValue>,
+    #[serde(flatten)]
+    result: &'a ScriptResult,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -574,7 +579,9 @@ impl ScriptConfig {
 
         // We need to enable tracing to decode contract names: local or external.
         let mut builder = ExecutorBuilder::new()
-            .inspectors(|stack| stack.trace(true))
+            .inspectors(|stack| {
+                stack.trace_mode(if debug { TraceMode::Debug } else { TraceMode::Call })
+            })
             .spec(self.config.evm_spec_id())
             .gas_limit(self.evm_opts.gas_limit())
             .legacy_assertions(self.config.legacy_assertions);
@@ -582,7 +589,6 @@ impl ScriptConfig {
         if let Some((known_contracts, script_wallets, target)) = cheats_data {
             builder = builder.inspectors(|stack| {
                 stack
-                    .debug(debug)
                     .cheatcodes(
                         CheatsConfig::new(
                             &self.config,

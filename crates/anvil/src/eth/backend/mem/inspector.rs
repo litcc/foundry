@@ -41,6 +41,11 @@ impl Inspector {
         self
     }
 
+    pub fn with_tracing_config(mut self, config: TracingInspectorConfig) -> Self {
+        self.tracer = Some(TracingInspector::new(config));
+        self
+    }
+
     /// Enables steps recording for `Tracer`.
     pub fn with_steps_tracing(mut self) -> Self {
         self.tracer = Some(TracingInspector::new(TracingInspectorConfig::all()));
@@ -73,9 +78,9 @@ impl<DB: Database> revm::Inspector<DB> for Inspector {
         });
     }
 
-    fn log(&mut self, ecx: &mut EvmContext<DB>, log: &Log) {
+    fn log(&mut self, interp: &mut Interpreter, ecx: &mut EvmContext<DB>, log: &Log) {
         call_inspectors!([&mut self.tracer, &mut self.log_collector], |inspector| {
-            inspector.log(ecx, log);
+            inspector.log(interp, ecx, log);
         });
     }
 

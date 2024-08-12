@@ -3053,6 +3053,26 @@
     },
     {
       "func": {
+        "id": "broadcastRawTransaction",
+        "description": "Takes a signed transaction and broadcasts it to the network.",
+        "declaration": "function broadcastRawTransaction(bytes calldata data) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "broadcastRawTransaction(bytes)",
+        "selector": "0x8c0c72e0",
+        "selectorBytes": [
+          140,
+          12,
+          114,
+          224
+        ]
+      },
+      "group": "scripting",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
         "id": "broadcast_0",
         "description": "Has the next call (at this call depth only) create transactions that can later be signed and sent onchain.\nBroadcasting address is determined by checking the following in order:\n1. If `--sender` argument was provided, that address is used.\n2. If exactly one signer (e.g. private key, hw wallet, keystore) is set when `forge broadcast` is invoked, that signer is used.\n3. Otherwise, default foundry sender (1804c8AB1F12E6bbf3894d4083f33e07309d1f38) is used.",
         "declaration": "function broadcast() external;",
@@ -3447,7 +3467,7 @@
           210
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -3467,7 +3487,7 @@
           182
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -3487,7 +3507,7 @@
           98
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -3607,7 +3627,7 @@
           139
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -3627,7 +3647,7 @@
           27
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -3647,7 +3667,7 @@
           109
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -3667,7 +3687,7 @@
           31
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -4533,6 +4553,86 @@
     },
     {
       "func": {
+        "id": "expectEmitAnonymous_0",
+        "description": "Prepare an expected anonymous log with (bool checkTopic1, bool checkTopic2, bool checkTopic3, bool checkData.).\nCall this function, then emit an anonymous event, then call a function. Internally after the call, we check if\nlogs were emitted in the expected order with the expected topics and data (as specified by the booleans).",
+        "declaration": "function expectEmitAnonymous(bool checkTopic0, bool checkTopic1, bool checkTopic2, bool checkTopic3, bool checkData) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "expectEmitAnonymous(bool,bool,bool,bool,bool)",
+        "selector": "0xc948db5e",
+        "selectorBytes": [
+          201,
+          72,
+          219,
+          94
+        ]
+      },
+      "group": "testing",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
+        "id": "expectEmitAnonymous_1",
+        "description": "Same as the previous method, but also checks supplied address against emitting contract.",
+        "declaration": "function expectEmitAnonymous(bool checkTopic0, bool checkTopic1, bool checkTopic2, bool checkTopic3, bool checkData, address emitter) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "expectEmitAnonymous(bool,bool,bool,bool,bool,address)",
+        "selector": "0x71c95899",
+        "selectorBytes": [
+          113,
+          201,
+          88,
+          153
+        ]
+      },
+      "group": "testing",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
+        "id": "expectEmitAnonymous_2",
+        "description": "Prepare an expected anonymous log with all topic and data checks enabled.\nCall this function, then emit an anonymous event, then call a function. Internally after the call, we check if\nlogs were emitted in the expected order with the expected topics and data.",
+        "declaration": "function expectEmitAnonymous() external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "expectEmitAnonymous()",
+        "selector": "0x2e5f270c",
+        "selectorBytes": [
+          46,
+          95,
+          39,
+          12
+        ]
+      },
+      "group": "testing",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
+        "id": "expectEmitAnonymous_3",
+        "description": "Same as the previous method, but also checks supplied address against emitting contract.",
+        "declaration": "function expectEmitAnonymous(address emitter) external;",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "expectEmitAnonymous(address)",
+        "selector": "0x6fc68705",
+        "selectorBytes": [
+          111,
+          198,
+          135,
+          5
+        ]
+      },
+      "group": "testing",
+      "status": "stable",
+      "safety": "unsafe"
+    },
+    {
+      "func": {
         "id": "expectEmit_0",
         "description": "Prepare an expected log with (bool checkTopic1, bool checkTopic2, bool checkTopic3, bool checkData.).\nCall this function, then emit an event, then call a function. Internally after the call, we check if\nlogs were emitted in the expected order with the expected topics and data (as specified by the booleans).",
         "declaration": "function expectEmit(bool checkTopic1, bool checkTopic2, bool checkTopic3, bool checkData) external;",
@@ -4893,6 +4993,26 @@
     },
     {
       "func": {
+        "id": "getFoundryVersion",
+        "description": "Returns the Foundry version.\nFormat: <cargo_version>+<git_sha>+<build_timestamp>\nSample output: 0.2.0+faa94c384+202407110019\nNote: Build timestamps may vary slightly across platforms due to separate CI jobs.\nFor reliable version comparisons, use YYYYMMDD0000 format (e.g., >= 202407110000)\nto compare timestamps while ignoring minor time differences.",
+        "declaration": "function getFoundryVersion() external view returns (string memory version);",
+        "visibility": "external",
+        "mutability": "view",
+        "signature": "getFoundryVersion()",
+        "selector": "0xea991bb5",
+        "selectorBytes": [
+          234,
+          153,
+          27,
+          181
+        ]
+      },
+      "group": "testing",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
         "id": "getLabel",
         "description": "Gets the label for the specified address.",
         "declaration": "function getLabel(address account) external view returns (string memory currentLabel);",
@@ -4994,7 +5114,7 @@
     {
       "func": {
         "id": "getNonce_1",
-        "description": "Get a `Wallet`'s nonce.",
+        "description": "Get the nonce of a `Wallet`.",
         "declaration": "function getNonce(Wallet calldata wallet) external returns (uint64 nonce);",
         "visibility": "external",
         "mutability": "",
@@ -5007,7 +5127,7 @@
           173
         ]
       },
-      "group": "utilities",
+      "group": "evm",
       "status": "stable",
       "safety": "safe"
     },
@@ -5785,6 +5905,66 @@
           143,
           220,
           244
+        ]
+      },
+      "group": "json",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "parseJsonTypeArray",
+        "description": "Parses a string of JSON data at `key` and coerces it to type array corresponding to `typeDescription`.",
+        "declaration": "function parseJsonTypeArray(string calldata json, string calldata key, string calldata typeDescription) external pure returns (bytes memory);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "parseJsonTypeArray(string,string,string)",
+        "selector": "0x0175d535",
+        "selectorBytes": [
+          1,
+          117,
+          213,
+          53
+        ]
+      },
+      "group": "json",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "parseJsonType_0",
+        "description": "Parses a string of JSON data and coerces it to type corresponding to `typeDescription`.",
+        "declaration": "function parseJsonType(string calldata json, string calldata typeDescription) external pure returns (bytes memory);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "parseJsonType(string,string)",
+        "selector": "0xa9da313b",
+        "selectorBytes": [
+          169,
+          218,
+          49,
+          59
+        ]
+      },
+      "group": "json",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "parseJsonType_1",
+        "description": "Parses a string of JSON data at `key` and coerces it to type corresponding to `typeDescription`.",
+        "declaration": "function parseJsonType(string calldata json, string calldata key, string calldata typeDescription) external pure returns (bytes memory);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "parseJsonType(string,string,string)",
+        "selector": "0xe3f5ae33",
+        "selectorBytes": [
+          227,
+          245,
+          174,
+          51
         ]
       },
       "group": "json",
@@ -6727,7 +6907,7 @@
           100
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
@@ -7353,6 +7533,46 @@
     },
     {
       "func": {
+        "id": "serializeJsonType_0",
+        "description": "See `serializeJson`.",
+        "declaration": "function serializeJsonType(string calldata typeDescription, bytes memory value) external pure returns (string memory json);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "serializeJsonType(string,bytes)",
+        "selector": "0x6d4f96a6",
+        "selectorBytes": [
+          109,
+          79,
+          150,
+          166
+        ]
+      },
+      "group": "json",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "serializeJsonType_1",
+        "description": "See `serializeJson`.",
+        "declaration": "function serializeJsonType(string calldata objectKey, string calldata valueKey, string calldata typeDescription, bytes memory value) external returns (string memory json);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "serializeJsonType(string,string,string,bytes)",
+        "selector": "0x6f93bccb",
+        "selectorBytes": [
+          111,
+          147,
+          188,
+          203
+        ]
+      },
+      "group": "json",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
         "id": "serializeString_0",
         "description": "See `serializeJson`.",
         "declaration": "function serializeString(string calldata objectKey, string calldata valueKey, string calldata value) external returns (string memory json);",
@@ -7533,6 +7753,86 @@
     },
     {
       "func": {
+        "id": "signCompact_0",
+        "description": "Signs data with a `Wallet`.\nReturns a compact signature (`r`, `vs`) as per EIP-2098, where `vs` encodes both the\nsignature's `s` value, and the recovery id `v` in a single bytes32.\nThis format reduces the signature size from 65 to 64 bytes.",
+        "declaration": "function signCompact(Wallet calldata wallet, bytes32 digest) external returns (bytes32 r, bytes32 vs);",
+        "visibility": "external",
+        "mutability": "",
+        "signature": "signCompact((address,uint256,uint256,uint256),bytes32)",
+        "selector": "0x3d0e292f",
+        "selectorBytes": [
+          61,
+          14,
+          41,
+          47
+        ]
+      },
+      "group": "crypto",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "signCompact_1",
+        "description": "Signs `digest` with `privateKey` using the secp256k1 curve.\nReturns a compact signature (`r`, `vs`) as per EIP-2098, where `vs` encodes both the\nsignature's `s` value, and the recovery id `v` in a single bytes32.\nThis format reduces the signature size from 65 to 64 bytes.",
+        "declaration": "function signCompact(uint256 privateKey, bytes32 digest) external pure returns (bytes32 r, bytes32 vs);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "signCompact(uint256,bytes32)",
+        "selector": "0xcc2a781f",
+        "selectorBytes": [
+          204,
+          42,
+          120,
+          31
+        ]
+      },
+      "group": "crypto",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "signCompact_2",
+        "description": "Signs `digest` with signer provided to script using the secp256k1 curve.\nReturns a compact signature (`r`, `vs`) as per EIP-2098, where `vs` encodes both the\nsignature's `s` value, and the recovery id `v` in a single bytes32.\nThis format reduces the signature size from 65 to 64 bytes.\nIf `--sender` is provided, the signer with provided address is used, otherwise,\nif exactly one signer is provided to the script, that signer is used.\nRaises error if signer passed through `--sender` does not match any unlocked signers or\nif `--sender` is not provided and not exactly one signer is passed to the script.",
+        "declaration": "function signCompact(bytes32 digest) external pure returns (bytes32 r, bytes32 vs);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "signCompact(bytes32)",
+        "selector": "0xa282dc4b",
+        "selectorBytes": [
+          162,
+          130,
+          220,
+          75
+        ]
+      },
+      "group": "crypto",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "signCompact_3",
+        "description": "Signs `digest` with signer provided to script using the secp256k1 curve.\nReturns a compact signature (`r`, `vs`) as per EIP-2098, where `vs` encodes both the\nsignature's `s` value, and the recovery id `v` in a single bytes32.\nThis format reduces the signature size from 65 to 64 bytes.\nRaises error if none of the signers passed into the script have provided address.",
+        "declaration": "function signCompact(address signer, bytes32 digest) external pure returns (bytes32 r, bytes32 vs);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "signCompact(address,bytes32)",
+        "selector": "0x8e2f97bf",
+        "selectorBytes": [
+          142,
+          47,
+          151,
+          191
+        ]
+      },
+      "group": "crypto",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
         "id": "signP256",
         "description": "Signs `digest` with `privateKey` using the secp256r1 curve.",
         "declaration": "function signP256(uint256 privateKey, bytes32 digest) external pure returns (bytes32 r, bytes32 s);",
@@ -7547,73 +7847,13 @@
           64
         ]
       },
-      "group": "evm",
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },
     {
       "func": {
         "id": "sign_0",
-        "description": "Signs `digest` with `privateKey` using the secp256k1 curve.",
-        "declaration": "function sign(uint256 privateKey, bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);",
-        "visibility": "external",
-        "mutability": "pure",
-        "signature": "sign(uint256,bytes32)",
-        "selector": "0xe341eaa4",
-        "selectorBytes": [
-          227,
-          65,
-          234,
-          164
-        ]
-      },
-      "group": "evm",
-      "status": "stable",
-      "safety": "safe"
-    },
-    {
-      "func": {
-        "id": "sign_1",
-        "description": "Signs `digest` with signer provided to script using the secp256k1 curve.\nIf `--sender` is provided, the signer with provided address is used, otherwise,\nif exactly one signer is provided to the script, that signer is used.\nRaises error if signer passed through `--sender` does not match any unlocked signers or\nif `--sender` is not provided and not exactly one signer is passed to the script.",
-        "declaration": "function sign(bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);",
-        "visibility": "external",
-        "mutability": "pure",
-        "signature": "sign(bytes32)",
-        "selector": "0x799cd333",
-        "selectorBytes": [
-          121,
-          156,
-          211,
-          51
-        ]
-      },
-      "group": "evm",
-      "status": "stable",
-      "safety": "safe"
-    },
-    {
-      "func": {
-        "id": "sign_2",
-        "description": "Signs `digest` with signer provided to script using the secp256k1 curve.\nRaises error if none of the signers passed into the script have provided address.",
-        "declaration": "function sign(address signer, bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);",
-        "visibility": "external",
-        "mutability": "pure",
-        "signature": "sign(address,bytes32)",
-        "selector": "0x8c1aa205",
-        "selectorBytes": [
-          140,
-          26,
-          162,
-          5
-        ]
-      },
-      "group": "evm",
-      "status": "stable",
-      "safety": "safe"
-    },
-    {
-      "func": {
-        "id": "sign_3",
         "description": "Signs data with a `Wallet`.",
         "declaration": "function sign(Wallet calldata wallet, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);",
         "visibility": "external",
@@ -7627,7 +7867,67 @@
           37
         ]
       },
-      "group": "utilities",
+      "group": "crypto",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "sign_1",
+        "description": "Signs `digest` with `privateKey` using the secp256k1 curve.",
+        "declaration": "function sign(uint256 privateKey, bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "sign(uint256,bytes32)",
+        "selector": "0xe341eaa4",
+        "selectorBytes": [
+          227,
+          65,
+          234,
+          164
+        ]
+      },
+      "group": "crypto",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "sign_2",
+        "description": "Signs `digest` with signer provided to script using the secp256k1 curve.\nIf `--sender` is provided, the signer with provided address is used, otherwise,\nif exactly one signer is provided to the script, that signer is used.\nRaises error if signer passed through `--sender` does not match any unlocked signers or\nif `--sender` is not provided and not exactly one signer is passed to the script.",
+        "declaration": "function sign(bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "sign(bytes32)",
+        "selector": "0x799cd333",
+        "selectorBytes": [
+          121,
+          156,
+          211,
+          51
+        ]
+      },
+      "group": "crypto",
+      "status": "stable",
+      "safety": "safe"
+    },
+    {
+      "func": {
+        "id": "sign_3",
+        "description": "Signs `digest` with signer provided to script using the secp256k1 curve.\nRaises error if none of the signers passed into the script have provided address.",
+        "declaration": "function sign(address signer, bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);",
+        "visibility": "external",
+        "mutability": "pure",
+        "signature": "sign(address,bytes32)",
+        "selector": "0x8c1aa205",
+        "selectorBytes": [
+          140,
+          26,
+          162,
+          5
+        ]
+      },
+      "group": "crypto",
       "status": "stable",
       "safety": "safe"
     },

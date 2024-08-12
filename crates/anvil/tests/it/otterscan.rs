@@ -5,10 +5,10 @@ use alloy_primitives::{address, Address, Bytes, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types::{
     trace::otterscan::{InternalOperation, OperationType, TraceEntry},
-    BlockNumberOrTag, BlockTransactions, TransactionRequest,
+    BlockNumberOrTag, TransactionRequest,
 };
 use alloy_serde::WithOtherFields;
-use alloy_sol_types::{sol, SolCall, SolError};
+use alloy_sol_types::{sol, SolCall, SolError, SolValue};
 use anvil::{spawn, Hardfork, NodeConfig};
 use std::collections::VecDeque;
 
@@ -243,6 +243,7 @@ async fn test_call_ots_trace_transaction() {
             to: contract_address,
             value: U256::from(1337),
             input: Contract::runCall::SELECTOR.into(),
+            output: Bytes::new(),
         },
         TraceEntry {
             r#type: "STATICCALL".to_string(),
@@ -251,6 +252,7 @@ async fn test_call_ots_trace_transaction() {
             to: contract_address,
             value: U256::ZERO,
             input: Contract::do_staticcallCall::SELECTOR.into(),
+            output: true.abi_encode().into(),
         },
         TraceEntry {
             r#type: "CALL".to_string(),
@@ -259,6 +261,7 @@ async fn test_call_ots_trace_transaction() {
             to: contract_address,
             value: U256::ZERO,
             input: Contract::do_callCall::SELECTOR.into(),
+            output: Bytes::new(),
         },
         TraceEntry {
             r#type: "CALL".to_string(),
@@ -267,6 +270,7 @@ async fn test_call_ots_trace_transaction() {
             to: sender,
             value: U256::from(1337),
             input: Bytes::new(),
+            output: Bytes::new(),
         },
         TraceEntry {
             r#type: "DELEGATECALL".to_string(),
@@ -275,6 +279,7 @@ async fn test_call_ots_trace_transaction() {
             to: contract_address,
             value: U256::ZERO,
             input: Contract::do_delegatecallCall::SELECTOR.into(),
+            output: Bytes::new(),
         },
     ];
     assert_eq!(res, expected);
@@ -326,13 +331,11 @@ async fn ots_get_block_details() {
 
     let tx = TransactionRequest::default().to(Address::random()).value(U256::from(100));
     let tx = WithOtherFields::new(tx);
-    let receipt = provider.send_transaction(tx).await.unwrap().get_receipt().await.unwrap();
+    provider.send_transaction(tx).await.unwrap().get_receipt().await.unwrap();
 
     let result = api.ots_get_block_details(1.into()).await.unwrap();
 
     assert_eq!(result.block.transaction_count, 1);
-    let hash = result.block.block.transactions.hashes().next().unwrap();
-    assert_eq!(*hash, receipt.transaction_hash);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -348,12 +351,6 @@ async fn ots_get_block_details_by_hash() {
     let result = api.ots_get_block_details_by_hash(block_hash).await.unwrap();
 
     assert_eq!(result.block.transaction_count, 1);
-    let hash = match result.block.block.transactions {
-        BlockTransactions::Full(txs) => txs[0].hash,
-        BlockTransactions::Hashes(hashes) => hashes[0],
-        BlockTransactions::Uncle => unreachable!(),
-    };
-    assert_eq!(hash, receipt.transaction_hash);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -388,7 +385,7 @@ async fn ots_get_block_transactions() {
         result.receipts.iter().enumerate().for_each(|(i, receipt)| {
             let expected = hashes.pop_front();
             assert_eq!(expected, Some(receipt.receipt.transaction_hash));
-            assert_eq!(expected, result.fullblock.block.transactions.hashes().nth(i).copied());
+            assert_eq!(expected, result.fullblock.block.transactions.hashes().nth(i));
         });
     }
 
@@ -516,5 +513,5 @@ async fn ots_get_contract_creator() {
     let creator = api.ots_get_contract_creator(contract_address).await.unwrap().unwrap();
 
     assert_eq!(creator.creator, sender);
-    assert_eq!(creator.tx.hash, receipt.transaction_hash);
+    assert_eq!(creator.hash, receipt.transaction_hash);
 }

@@ -1,7 +1,7 @@
 use super::ScriptResult;
 use crate::build::ScriptPredeployLibraries;
 use alloy_primitives::{Address, Bytes, TxKind, U256};
-use alloy_rpc_types::TransactionRequest;
+use alloy_rpc_types::{TransactionInput, TransactionRequest};
 use eyre::Result;
 use foundry_cheatcodes::BroadcastableTransaction;
 use foundry_config::Config;
@@ -75,10 +75,11 @@ impl ScriptRunner {
                     rpc: self.evm_opts.fork_url.clone(),
                     transaction: TransactionRequest {
                         from: Some(self.evm_opts.sender),
-                        input: Some(code.clone()).into(),
+                        input: TransactionInput::both(code.clone()),
                         nonce: Some(sender_nonce + library_transactions.len() as u64),
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                 })
             }),
             ScriptPredeployLibraries::Create2(libraries, salt) => {
@@ -108,11 +109,12 @@ impl ScriptRunner {
                         rpc: self.evm_opts.fork_url.clone(),
                         transaction: TransactionRequest {
                             from: Some(self.evm_opts.sender),
-                            input: Some(calldata.into()).into(),
+                            input: TransactionInput::both(calldata.clone().into()),
                             nonce: Some(sender_nonce + library_transactions.len() as u64),
                             to: Some(TxKind::Call(DEFAULT_CREATE2_DEPLOYER)),
                             ..Default::default()
-                        },
+                        }
+                        .into(),
                     });
                 }
 
