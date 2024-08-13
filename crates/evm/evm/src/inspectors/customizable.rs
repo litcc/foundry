@@ -85,7 +85,13 @@ pub trait CustomizableInspector: Any + Send + Sync {
 
     /// Called when a log is emitted.
     #[inline]
-    fn log(&mut self, _context: InnerEvmContextWrap<'_, '_>, _log: &Log) {}
+    fn log(
+        &mut self,
+        _interp: &mut Interpreter,
+        _context: InnerEvmContextWrap<'_, '_>,
+        _log: &Log,
+    ) {
+    }
 
     /// Called whenever a call to a contract is about to start.
     ///
@@ -212,9 +218,9 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         self.inspector.step_end(interp, evm_context)
     }
 
-    fn log(&mut self, context: &mut EvmContext<DB>, log: &Log) {
+    fn log(&mut self, interp: &mut Interpreter, context: &mut EvmContext<DB>, log: &Log) {
         let evm_context = Self::inner_evm_context(context);
-        self.inspector.log(evm_context, log)
+        self.inspector.log(interp, evm_context, log)
     }
 
     fn call(
