@@ -181,6 +181,10 @@ pub struct ScriptArgs {
     )]
     pub with_gas_price: Option<U256>,
 
+    /// Timeout to use for broadcasting transactions.
+    #[arg(long, env = "ETH_TIMEOUT")]
+    pub timeout: Option<u64>,
+
     #[command(flatten)]
     pub opts: CoreBuildArgs,
 
@@ -272,7 +276,7 @@ impl ScriptArgs {
         };
 
         // Exit early in case user didn't provide any broadcast/verify related flags.
-        if !bundled.args.broadcast && !bundled.args.resume && !bundled.args.verify {
+        if !bundled.args.should_broadcast() {
             shell::println("\nSIMULATION COMPLETE. To broadcast these transactions, add --broadcast and wallet configuration(s) to the previous command. See forge script --help for more.")?;
             return Ok(());
         }
@@ -415,7 +419,7 @@ impl ScriptArgs {
                 let deployment_size = deployed_code.len();
 
                 if deployment_size > max_size {
-                    prompt_user = self.broadcast;
+                    prompt_user = self.should_broadcast();
                     shell::println(format!(
                         "{}",
                         format!(
@@ -436,6 +440,11 @@ impl ScriptArgs {
 
         Ok(())
     }
+
+    /// We only broadcast transactions if --broadcast or --resume was passed.
+    fn should_broadcast(&self) -> bool {
+        self.broadcast || self.resume
+    }
 }
 
 impl Provider for ScriptArgs {
@@ -452,6 +461,9 @@ impl Provider for ScriptArgs {
                 "etherscan_api_key".to_string(),
                 figment::value::Value::from(etherscan_api_key.to_string()),
             );
+        }
+        if let Some(timeout) = self.timeout {
+            dict.insert("transaction_timeout".to_string(), timeout.into());
         }
         Ok(Map::from([(Config::selected_profile(), dict)]))
     }
@@ -580,7 +592,9 @@ impl ScriptConfig {
         // We need to enable tracing to decode contract names: local or external.
         let mut builder = ExecutorBuilder::new()
             .inspectors(|stack| {
-                stack.trace_mode(if debug { TraceMode::Debug } else { TraceMode::Call })
+                stack
+                    .trace_mode(if debug { TraceMode::Debug } else { TraceMode::Call })
+                    .alphanet(self.evm_opts.alphanet)
             })
             .spec(self.config.evm_spec_id())
             .gas_limit(self.evm_opts.gas_limit())

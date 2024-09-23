@@ -13,6 +13,7 @@ use foundry_evm_core::{
     backend::{DatabaseExt, RevertSnapshotAction},
     constants::{CALLER, CHEATCODE_ADDRESS, HARDHAT_CONSOLE_ADDRESS, TEST_CONTRACT_ADDRESS},
 };
+use rand::Rng;
 use revm::{
     primitives::{Account, Bytecode, SpecId, KECCAK_EMPTY},
     InnerEvmContext,
@@ -89,7 +90,34 @@ impl Cheatcode for loadCall {
         let Self { target, slot } = *self;
         ensure_not_precompile!(&target, ccx);
         ccx.ecx.load_account(target)?;
-        let (val, _) = ccx.ecx.sload(target, slot.into())?;
+        let mut val = ccx.ecx.sload(target, slot.into())?;
+
+        if val.is_cold && val.data.is_zero() {
+            if ccx.state.has_arbitrary_storage(&target) {
+                // If storage slot is untouched and load from a target with arbitrary storage,
+                // then set random value for current slot.
+                let rand_value = ccx.state.rng().gen();
+                ccx.state.arbitrary_storage.as_mut().unwrap().save(
+                    ccx.ecx,
+                    target,
+                    slot.into(),
+                    rand_value,
+                );
+                val.data = rand_value;
+            } else if ccx.state.is_arbitrary_storage_copy(&target) {
+                // If storage slot is untouched and load from a target that copies storage from
+                // a source address with arbitrary storage, then copy existing arbitrary value.
+                // If no arbitrary value generated yet, then the random one is saved and set.
+                let rand_value = ccx.state.rng().gen();
+                val.data = ccx.state.arbitrary_storage.as_mut().unwrap().copy(
+                    ccx.ecx,
+                    target,
+                    slot.into(),
+                    rand_value,
+                );
+            }
+        }
+
         Ok(val.abi_encode())
     }
 }
@@ -209,9 +237,7 @@ impl Cheatcode for getRecordedLogsCall {
 impl Cheatcode for pauseGasMeteringCall {
     fn apply(&self, state: &mut Cheatcodes) -> Result {
         let Self {} = self;
-        if state.gas_metering.is_none() {
-            state.gas_metering = Some(None);
-        }
+        state.gas_metering.paused = true;
         Ok(Default::default())
     }
 }
@@ -219,7 +245,15 @@ impl Cheatcode for pauseGasMeteringCall {
 impl Cheatcode for resumeGasMeteringCall {
     fn apply(&self, state: &mut Cheatcodes) -> Result {
         let Self {} = self;
-        state.gas_metering = None;
+        state.gas_metering.resume();
+        Ok(Default::default())
+    }
+}
+
+impl Cheatcode for resetGasMeteringCall {
+    fn apply(&self, state: &mut Cheatcodes) -> Result {
+        let Self {} = self;
+        state.gas_metering.reset();
         Ok(Default::default())
     }
 }
@@ -227,7 +261,7 @@ impl Cheatcode for resumeGasMeteringCall {
 impl Cheatcode for lastCallGasCall {
     fn apply(&self, state: &mut Cheatcodes) -> Result {
         let Self {} = self;
-        let Some(last_call_gas) = &state.last_call_gas else {
+        let Some(last_call_gas) = &state.gas_metering.last_call_gas else {
             bail!("no external call was made yet");
         };
         Ok(last_call_gas.abi_encode())
@@ -590,7 +624,7 @@ impl Cheatcode for setBlockhashCall {
 }
 
 pub(super) fn get_nonce<DB: DatabaseExt>(ccx: &mut CheatsCtxt<DB>, address: &Address) -> Result {
-    let (account, _) = ccx.ecx.journaled_state.load_account(*address, &mut ccx.ecx.db)?;
+    let account = ccx.ecx.journaled_state.load_account(*address, &mut ccx.ecx.db)?;
     Ok(account.info.nonce.abi_encode())
 }
 

@@ -56,6 +56,20 @@ pub struct TransactionOpts {
     /// Gas price for EIP-4844 blob transaction.
     #[arg(long, conflicts_with = "legacy", value_parser = parse_ether_value, env = "ETH_BLOB_GAS_PRICE", value_name = "BLOB_PRICE")]
     pub blob_gas_price: Option<U256>,
+
+    /// EIP-7702 authorization list.
+    ///
+    /// Can be either a hex-encoded signed authorization or an address.
+    #[arg(long, conflicts_with_all = &["legacy", "blob"])]
+    pub auth: Option<String>,
+
+    /// EIP-2930 access list.
+    ///
+    /// Accepts either a JSON-encoded access list or an empty value to create the access list
+    /// via an RPC call to `eth_createAccessList`. To retrieve only the access list portion, use
+    /// the `cast access-list` command.
+    #[arg(long)]
+    pub access_list: Option<Option<String>>,
 }
 
 #[cfg(test)]

@@ -370,7 +370,16 @@ impl<'a, W: Write> Formatter<'a, W> {
         &mut self,
         byte_offset: usize,
         next_byte_offset: Option<usize>,
-        fun: impl FnMut(&mut Self) -> Result<()>,
+        mut fun: impl FnMut(&mut Self) -> Result<()>,
+    ) -> Result<Chunk> {
+        self.chunked_mono(byte_offset, next_byte_offset, &mut fun)
+    }
+
+    fn chunked_mono(
+        &mut self,
+        byte_offset: usize,
+        next_byte_offset: Option<usize>,
+        fun: &mut dyn FnMut(&mut Self) -> Result<()>,
     ) -> Result<Chunk> {
         let postfixes_before = self.comments.remove_postfixes_before(byte_offset);
         let prefixes = self.comments.remove_prefixes_before(byte_offset);
@@ -1246,7 +1255,7 @@ impl<'a, W: Write> Formatter<'a, W> {
             })?;
 
             write_chunk!(self, "}}")?;
-            return Ok(true)
+            return Ok(false)
         }
 
         // Determine writable statements by excluding statements from disabled start / end lines.
@@ -1617,7 +1626,9 @@ impl<'a, W: Write> Formatter<'a, W> {
                     let should_multiline = header_multiline &&
                         matches!(
                             fmt.config.multiline_func_header,
-                            MultilineFuncHeaderStyle::ParamsFirst | MultilineFuncHeaderStyle::All
+                            MultilineFuncHeaderStyle::ParamsFirst |
+                                MultilineFuncHeaderStyle::ParamsFirstMulti |
+                                MultilineFuncHeaderStyle::All
                         );
                     params_multiline = should_multiline ||
                         multiline ||
@@ -1626,8 +1637,13 @@ impl<'a, W: Write> Formatter<'a, W> {
                             &params,
                             ",",
                         )?;
-                    // Write new line if we have only one parameter and params on multiline set.
-                    if params.len() == 1 && params_multiline {
+                    // Write new line if we have only one parameter and params first set.
+                    if params.len() == 1 &&
+                        matches!(
+                            fmt.config.multiline_func_header,
+                            MultilineFuncHeaderStyle::ParamsFirst
+                        )
+                    {
                         writeln!(fmt.buf())?;
                     }
                     fmt.write_chunks_separated(&params, ",", params_multiline)?;
@@ -1782,7 +1798,7 @@ impl<'a, W: Write> Formatter<'a, W> {
                 self.visit_if(*loc, cond, if_branch, else_branch, false)?;
             } else {
                 let else_branch_is_single_line =
-                    self.visit_stmt_as_block(else_branch, if_branch_is_single_line)?;
+                    self.visit_stmt_as_block(else_branch, attempt_single_line)?;
                 if single_line_stmt_wide && !else_branch_is_single_line {
                     bail!(FormatterError::fmt())
                 }

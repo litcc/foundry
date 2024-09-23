@@ -11,8 +11,9 @@ use crate::{
         fees::{INITIAL_BASE_FEE, INITIAL_GAS_PRICE},
         pool::transactions::{PoolTransaction, TransactionOrder},
     },
+    hardfork::{ChainHardfork, OptimismHardfork},
     mem::{self, in_memory_db::MemDb},
-    FeeManager, Hardfork, PrecompileFactory,
+    EthereumHardfork, FeeManager, PrecompileFactory,
 };
 use alloy_genesis::Genesis;
 use alloy_network::AnyNetwork;
@@ -64,7 +65,6 @@ pub const DEFAULT_MNEMONIC: &str = "test test test test test test test test test
 /// The default IPC endpoint
 pub const DEFAULT_IPC_ENDPOINT: &str =
     if cfg!(unix) { "/tmp/anvil.ipc" } else { r"\\.\pipe\anvil.ipc" };
-
 /// `anvil 0.1.0 (f01b232bc 2022-04-13T23:28:39.493201+00:00)`
 pub const VERSION_MESSAGE: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -100,7 +100,7 @@ pub struct NodeConfig {
     /// Default blob excess gas and price
     pub blob_excess_gas_and_price: Option<BlobExcessGasAndPrice>,
     /// The hardfork to use
-    pub hardfork: Option<Hardfork>,
+    pub hardfork: Option<ChainHardfork>,
     /// Signer accounts that will be initialised with `genesis_balance` in the genesis block
     pub genesis_accounts: Vec<PrivateKeySigner>,
     /// Native token balance of every genesis account in the genesis block
@@ -183,6 +183,8 @@ pub struct NodeConfig {
     pub memory_limit: Option<u64>,
     /// Factory used by `anvil` to extend the EVM's precompiles.
     pub precompile_factory: Option<Arc<dyn PrecompileFactory>>,
+    /// Enable Alphanet features.
+    pub alphanet: bool,
 }
 
 impl NodeConfig {
@@ -437,6 +439,7 @@ impl Default for NodeConfig {
             slots_in_an_epoch: 32,
             memory_limit: None,
             precompile_factory: None,
+            alphanet: false,
         }
     }
 }
@@ -471,9 +474,18 @@ impl NodeConfig {
         }
     }
 
-    /// Returns the base fee to use
-    pub fn get_hardfork(&self) -> Hardfork {
-        self.hardfork.unwrap_or_default()
+    /// Returns the hardfork to use
+    pub fn get_hardfork(&self) -> ChainHardfork {
+        if self.alphanet {
+            return ChainHardfork::Ethereum(EthereumHardfork::PragueEOF);
+        }
+        if let Some(hardfork) = self.hardfork {
+            return hardfork;
+        }
+        if self.enable_optimism {
+            return OptimismHardfork::default().into();
+        }
+        EthereumHardfork::default().into()
     }
 
     /// Sets a custom code size limit
@@ -615,7 +627,7 @@ impl NodeConfig {
 
     /// Sets the hardfork
     #[must_use]
-    pub fn with_hardfork(mut self, hardfork: Option<Hardfork>) -> Self {
+    pub fn with_hardfork(mut self, hardfork: Option<ChainHardfork>) -> Self {
         self.hardfork = hardfork;
         self
     }
@@ -918,6 +930,13 @@ impl NodeConfig {
         self
     }
 
+    /// Sets whether to enable Alphanet support
+    #[must_use]
+    pub fn with_alphanet(mut self, alphanet: bool) -> Self {
+        self.alphanet = alphanet;
+        self
+    }
+
     /// Configures everything related to env, backend and database and returns the
     /// [Backend](mem::Backend)
     ///
@@ -994,6 +1013,7 @@ impl NodeConfig {
             Arc::new(RwLock::new(fork)),
             self.enable_steps_tracing,
             self.print_logs,
+            self.alphanet,
             self.prune_history,
             self.max_persisted_states,
             self.transaction_block_keeper,
@@ -1055,7 +1075,6 @@ impl NodeConfig {
         let provider = Arc::new(
             ProviderBuilder::new(&eth_rpc_url)
                 .timeout(self.fork_request_timeout)
-                // .timeout_retry(self.fork_request_retries)
                 .initial_backoff(self.fork_retry_backoff.as_millis() as u64)
                 .compute_units_per_second(self.compute_units_per_second)
                 .max_retry(self.fork_request_retries)
@@ -1080,9 +1099,9 @@ impl NodeConfig {
                 let chain_id =
                     provider.get_chain_id().await.expect("Failed to fetch network chain ID");
                 if alloy_chains::NamedChain::Mainnet == chain_id {
-                    let hardfork: Hardfork = fork_block_number.into();
+                    let hardfork: EthereumHardfork = fork_block_number.into();
                     env.handler_cfg.spec_id = hardfork.into();
-                    self.hardfork = Some(hardfork);
+                    self.hardfork = Some(ChainHardfork::Ethereum(hardfork));
                 }
                 Some(U256::from(chain_id))
             } else {
@@ -1179,7 +1198,7 @@ latest block number: {latest_block}"
             }
         }
 
-        let block_hash = block.header.hash.unwrap_or_default();
+        let block_hash = block.header.hash;
 
         let chain_id = if let Some(chain_id) = self.chain_id {
             chain_id
@@ -1198,7 +1217,7 @@ latest block number: {latest_block}"
         };
         let override_chain_id = self.chain_id;
         // apply changes such as difficulty -> prevrandao and chain specifics for current chain id
-        apply_chain_and_block_specific_env_changes(env, &block);
+        apply_chain_and_block_specific_env_changes::<AnyNetwork>(env, &block);
 
         let meta = BlockchainDbMeta::new(*env.env.clone(), eth_rpc_url.clone());
         let block_chain_db = if self.fork_chain_id.is_some() {
@@ -1269,18 +1288,19 @@ async fn derive_block_and_transactions(
                 .ok_or(eyre::eyre!("Failed to get fork block by number"))?;
 
             // Filter out transactions that are after the fork transaction
-            let filtered_transactions: Vec<&Transaction> = transaction_block
-                .transactions
-                .as_transactions()
-                .ok_or(eyre::eyre!("Failed to get transactions from full fork block"))?
-                .iter()
-                .take_while_inclusive(|&transaction| transaction.hash != transaction_hash.0)
-                .collect();
+            let filtered_transactions: Vec<&alloy_serde::WithOtherFields<Transaction>> =
+                transaction_block
+                    .transactions
+                    .as_transactions()
+                    .ok_or(eyre::eyre!("Failed to get transactions from full fork block"))?
+                    .iter()
+                    .take_while_inclusive(|&transaction| transaction.hash != transaction_hash.0)
+                    .collect();
 
             // Convert the transactions to PoolTransactions
             let force_transactions = filtered_transactions
                 .iter()
-                .map(|&transaction| PoolTransaction::try_from(transaction.clone()))
+                .map(|&transaction| PoolTransaction::try_from(transaction.clone().inner))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((transaction_block_number.saturating_sub(1), Some(force_transactions)))
         }
@@ -1441,7 +1461,7 @@ async fn find_latest_fork_block<P: Provider<T, AnyNetwork>, T: Transport + Clone
     // leeway
     for _ in 0..2 {
         if let Some(block) = provider.get_block(num.into(), false.into()).await? {
-            if block.header.hash.is_some() {
+            if !block.header.hash.is_zero() {
                 break;
             }
         }

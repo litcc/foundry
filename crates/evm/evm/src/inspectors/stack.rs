@@ -10,7 +10,7 @@ use foundry_evm_core::{
     InspectorExt,
 };
 use foundry_evm_coverage::HitMaps;
-use foundry_evm_traces::{CallTraceArena, TraceMode};
+use foundry_evm_traces::{SparsedTraceArena, TraceMode};
 use revm::{
     inspectors::CustomPrintTracer,
     interpreter::{
@@ -59,6 +59,8 @@ pub struct InspectorStackBuilder {
     /// In isolation mode all top-level calls are executed as a separate transaction in a separate
     /// EVM context, enabling more precise gas accounting and transaction state changes.
     pub enable_isolation: bool,
+    /// Whether to enable Alphanet features.
+    pub alphanet: bool,
 }
 
 impl InspectorStackBuilder {
@@ -141,6 +143,14 @@ impl InspectorStackBuilder {
         self
     }
 
+    /// Set whether to enable Alphanet features.
+    /// For description of call isolation, see [`InspectorStack::enable_isolation`].
+    #[inline]
+    pub fn alphanet(mut self, yes: bool) -> Self {
+        self.alphanet = yes;
+        self
+    }
+
     /// Builds the stack of inspectors to use when transacting/committing on the EVM.
     pub fn build(self) -> InspectorStack {
         let Self {
@@ -154,6 +164,7 @@ impl InspectorStackBuilder {
             print,
             chisel_state,
             enable_isolation,
+            alphanet,
         } = self;
         let mut stack = InspectorStack::new();
 
@@ -173,6 +184,7 @@ impl InspectorStackBuilder {
         stack.tracing(trace_mode);
 
         stack.enable_isolation(enable_isolation);
+        stack.alphanet(alphanet);
 
         // environment, must come after all of the inspectors
         if let Some(block) = block {
@@ -233,7 +245,7 @@ macro_rules! call_inspectors_adjust_depth {
 pub struct InspectorData {
     pub logs: Vec<Log>,
     pub labels: HashMap<Address, String>,
-    pub traces: Option<CallTraceArena>,
+    pub traces: Option<SparsedTraceArena>,
     pub coverage: Option<HitMaps>,
     pub cheatcodes: Option<Cheatcodes>,
     pub customizable: Option<Customizable>,
@@ -247,15 +259,8 @@ pub struct InspectorData {
 /// non-isolated mode. For descriptions and workarounds for those changes see: <https://github.com/foundry-rs/foundry/pull/7186#issuecomment-1959102195>
 #[derive(Debug, Clone)]
 pub struct InnerContextData {
-    /// The sender of the inner EVM context.
-    /// It is also an origin of the transaction that created the inner EVM context.
-    sender: Address,
-    /// Nonce of the sender before invocation of the inner EVM context.
-    original_sender_nonce: u64,
     /// Origin of the transaction in the outer EVM context.
     original_origin: Address,
-    /// Whether the inner context was created by a CREATE transaction.
-    is_create: bool,
 }
 
 /// An inspector that calls multiple inspectors in sequence.
@@ -287,6 +292,7 @@ pub struct InspectorStackInner {
     pub tracer: Option<TracingInspector>,
     pub customizable: Option<Customizable>,
     pub enable_isolation: bool,
+    pub alphanet: bool,
 
     /// Flag marking if we are in the inner EVM context.
     pub in_inner_context: bool,
@@ -307,6 +313,10 @@ impl CheatcodesExecutor for InspectorStackInner {
         cheats: &'a mut Cheatcodes,
     ) -> impl InspectorExt<DB> + 'a {
         InspectorStackRefMut { cheatcodes: Some(cheats), inner: self }
+    }
+
+    fn tracing_inspector(&mut self) -> Option<&mut Option<TracingInspector>> {
+        Some(&mut self.tracer)
     }
 }
 
@@ -395,6 +405,12 @@ impl InspectorStack {
         self.enable_isolation = yes;
     }
 
+    /// Set whether to enable call isolation.
+    #[inline]
+    pub fn alphanet(&mut self, yes: bool) {
+        self.alphanet = yes;
+    }
+
     /// Set whether to enable the log collector.
     #[inline]
     pub fn collect_logs(&mut self, yes: bool) {
@@ -421,9 +437,27 @@ impl InspectorStack {
     #[inline]
     pub fn collect(self) -> InspectorData {
         let Self {
-            cheatcodes,
-            inner: InspectorStackInner { chisel_state, coverage, log_collector, tracer, customizable, .. },
+            mut cheatcodes,
+            inner: InspectorStackInner { chisel_state, coverage, log_collector, tracer, .. },
         } = self;
+
+        let traces = tracer.map(|tracer| tracer.into_traces()).map(|arena| {
+            let ignored = cheatcodes
+                .as_mut()
+                .map(|cheatcodes| {
+                    let mut ignored = std::mem::take(&mut cheatcodes.ignored_traces.ignored);
+
+                    // If the last pause call was not resumed, ignore the rest of the trace
+                    if let Some(last_pause_call) = cheatcodes.ignored_traces.last_pause_call {
+                        ignored.insert(last_pause_call, (arena.nodes().len(), 0));
+                    }
+
+                    ignored
+                })
+                .unwrap_or_default();
+
+            SparsedTraceArena { arena, ignored }
+        });
 
         InspectorData {
             logs: log_collector.map(|logs| logs.logs).unwrap_or_default(),
@@ -431,7 +465,7 @@ impl InspectorStack {
                 .as_ref()
                 .map(|cheatcodes| cheatcodes.labels.clone())
                 .unwrap_or_default(),
-            traces: tracer.map(|tracer| tracer.into_traces()),
+            traces,
             coverage: coverage.map(|coverage| coverage.maps),
             cheatcodes,
             chisel_state: chisel_state.and_then(|state| state.state),
@@ -453,14 +487,6 @@ impl<'a> InspectorStackRefMut<'a> {
     fn adjust_evm_data_for_inner_context<DB: DatabaseExt>(&mut self, ecx: &mut EvmContext<DB>) {
         let inner_context_data =
             self.inner_context_data.as_ref().expect("should be called in inner context");
-        let sender_acc = ecx
-            .journaled_state
-            .state
-            .get_mut(&inner_context_data.sender)
-            .expect("failed to load sender");
-        if !inner_context_data.is_create {
-            sender_acc.info.nonce = inner_context_data.original_sender_nonce;
-        }
         ecx.env.tx.caller = inner_context_data.original_origin;
     }
 
@@ -510,14 +536,6 @@ impl<'a> InspectorStackRefMut<'a> {
 
         ecx.db.commit(ecx.journaled_state.state.clone());
 
-        let nonce = ecx
-            .journaled_state
-            .load_account(caller, &mut ecx.db)
-            .expect("failed to load caller")
-            .0
-            .info
-            .nonce;
-
         let cached_env = ecx.env.clone();
 
         ecx.env.block.basefee = U256::ZERO;
@@ -525,7 +543,6 @@ impl<'a> InspectorStackRefMut<'a> {
         ecx.env.tx.transact_to = transact_to;
         ecx.env.tx.data = input;
         ecx.env.tx.value = value;
-        ecx.env.tx.nonce = Some(nonce);
         // Add 21000 to the gas limit to account for the base cost of transaction.
         ecx.env.tx.gas_limit = gas_limit + 21000;
         // If we haven't disabled gas limit checks, ensure that transaction gas limit will not
@@ -536,12 +553,7 @@ impl<'a> InspectorStackRefMut<'a> {
         }
         ecx.env.tx.gas_price = U256::ZERO;
 
-        self.inner_context_data = Some(InnerContextData {
-            sender: ecx.env.tx.caller,
-            original_origin: cached_env.tx.caller,
-            original_sender_nonce: nonce,
-            is_create: matches!(transact_to, TxKind::Create),
-        });
+        self.inner_context_data = Some(InnerContextData { original_origin: cached_env.tx.caller });
         self.in_inner_context = true;
 
         let env = EnvWithHandlerCfg::new_with_spec_id(ecx.env.clone(), ecx.spec_id());
@@ -663,13 +675,7 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn step_end(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<DB>) {
         call_inspectors_adjust_depth!(
-            [
-                &mut self.customizable,
-                &mut self.tracer,
-                &mut self.cheatcodes,
-                &mut self.chisel_state,
-                &mut self.printer
-            ],
+            [&mut self.customizable, &mut self.tracer, &mut self.cheatcodes, &mut self.chisel_state, &mut self.printer],
             |inspector| inspector.step_end(interpreter, ecx),
             self,
             ecx
@@ -678,12 +684,7 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn log(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<DB>, log: &Log) {
         call_inspectors_adjust_depth!(
-            [
-                &mut self.customizable,
-                &mut self.tracer,
-                &mut self.log_collector,
-                &mut self.cheatcodes,
-                &mut self.printer],
+            [&mut self.customizable, &mut self.tracer, &mut self.log_collector, &mut self.cheatcodes, &mut self.printer],
             |inspector| inspector.log(interpreter, ecx, log),
             self,
             ecx
@@ -698,13 +699,7 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
         call_inspectors_adjust_depth!(
             #[ret]
-            [
-                &mut self.customizable,
-                &mut self.fuzzer,
-                &mut self.tracer,
-                &mut self.log_collector,
-                &mut self.printer
-            ],
+            [&mut self.customizable, &mut self.fuzzer, &mut self.tracer, &mut self.log_collector, &mut self.printer],
             |inspector| {
                 let mut out = None;
                 if let Some(output) = inspector.call(ecx, call) {
@@ -720,6 +715,18 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
         ecx.journaled_state.depth += self.in_inner_context as usize;
         if let Some(cheatcodes) = self.cheatcodes.as_deref_mut() {
+            // Handle mocked functions, replace bytecode address with mock if matched.
+            if let Some(mocks) = cheatcodes.mocked_functions.get(&call.target_address) {
+                // Check if any mock function set for call data or if catch-all mock function set
+                // for selector.
+                if let Some(target) = mocks
+                    .get(&call.input)
+                    .or_else(|| call.input.get(..4).and_then(|selector| mocks.get(selector)))
+                {
+                    call.bytecode_address = *target;
+                }
+            }
+
             if let Some(output) = cheatcodes.call_with_executor(ecx, call, self.inner) {
                 if output.result.result != InstructionResult::Continue {
                     ecx.journaled_state.depth -= self.in_inner_context as usize;
@@ -921,10 +928,9 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
     }
 
     fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        call_inspectors!(
-            [&mut self.customizable, &mut self.tracer, &mut self.printer],
-            |inspector| { Inspector::<DB>::selfdestruct(inspector, contract, target, value) }
-        );
+        call_inspectors!([&mut self.customizable, &mut self.tracer, &mut self.printer], |inspector| {
+            Inspector::<DB>::selfdestruct(inspector, contract, target, value)
+        });
     }
 }
 
@@ -949,6 +955,10 @@ impl<'a, DB: DatabaseExt> InspectorExt<DB> for InspectorStackRefMut<'a> {
         call_inspectors!([&mut self.log_collector], |inspector| InspectorExt::<DB>::console_log(
             inspector, input
         ));
+    }
+
+    fn is_alphanet(&self) -> bool {
+        self.inner.alphanet
     }
 }
 
@@ -1034,6 +1044,10 @@ impl<DB: DatabaseExt> InspectorExt<DB> for InspectorStack {
         inputs: &mut CreateInputs,
     ) -> bool {
         self.as_mut().should_use_create2_factory(ecx, inputs)
+    }
+
+    fn is_alphanet(&self) -> bool {
+        self.alphanet
     }
 }
 

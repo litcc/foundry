@@ -1,7 +1,8 @@
 use crate::{
     config::{ForkChoice, DEFAULT_MNEMONIC},
     eth::{backend::db::SerializableState, pool::transactions::TransactionOrder, EthApi},
-    AccountGenerator, Hardfork, NodeConfig, CHAIN_ID,
+    hardfork::OptimismHardfork,
+    AccountGenerator, EthereumHardfork, NodeConfig, CHAIN_ID,
 };
 use alloy_genesis::Genesis;
 use alloy_primitives::{utils::Unit, B256, U256};
@@ -79,8 +80,8 @@ pub struct NodeArgs {
     ///
     /// Choose the hardfork by name, e.g. `shanghai`, `paris`, `london`, etc...
     /// [default: latest]
-    #[arg(long, value_parser = Hardfork::from_str)]
-    pub hardfork: Option<Hardfork>,
+    #[arg(long)]
+    pub hardfork: Option<String>,
 
     /// Block time in seconds for interval mining.
     #[arg(short, long, visible_alias = "blockTime", value_name = "SECONDS", value_parser = duration_from_secs_f64)]
@@ -148,6 +149,15 @@ pub struct NodeArgs {
     #[arg(long, value_name = "PATH", conflicts_with = "init")]
     pub dump_state: Option<PathBuf>,
 
+    /// Preserve historical state snapshots when dumping the state.
+    ///
+    /// This will save the in-memory states of the chain at particular block hashes.
+    ///
+    /// These historical states will be loaded into the memory when `--load-state` / `--state`, and
+    /// aids in RPC calls beyond the block at which state was dumped.
+    #[arg(long, conflicts_with = "init", default_value = "false")]
+    pub preserve_historical_states: bool,
+
     /// Initialize the chain from a previously saved state snapshot.
     #[arg(
         long,
@@ -196,7 +206,7 @@ const IPC_HELP: &str = "Launch an ipc server at the given path or default path =
 const DEFAULT_DUMP_INTERVAL: Duration = Duration::from_secs(60);
 
 impl NodeArgs {
-    pub fn into_node_config(self) -> NodeConfig {
+    pub fn into_node_config(self) -> eyre::Result<NodeConfig> {
         let genesis_balance = Unit::ETHER.wei().saturating_mul(U256::from(self.balance));
         let compute_units_per_second = if self.evm_opts.no_rate_limit {
             Some(u64::MAX)
@@ -204,11 +214,22 @@ impl NodeArgs {
             self.evm_opts.compute_units_per_second
         };
 
-        NodeConfig::default()
+        let hardfork = match &self.hardfork {
+            Some(hf) => {
+                if self.evm_opts.optimism {
+                    Some(OptimismHardfork::from_str(hf)?.into())
+                } else {
+                    Some(EthereumHardfork::from_str(hf)?.into())
+                }
+            }
+            None => None,
+        };
+
+        Ok(NodeConfig::default()
             .with_gas_limit(self.evm_opts.gas_limit)
             .disable_block_gas_limit(self.evm_opts.disable_block_gas_limit)
             .with_gas_price(self.evm_opts.gas_price)
-            .with_hardfork(self.hardfork)
+            .with_hardfork(hardfork)
             .with_blocktime(self.block_time)
             .with_no_mining(self.no_mining)
             .with_mixed_mining(self.mixed_mining, self.block_time)
@@ -252,9 +273,10 @@ impl NodeArgs {
             .with_transaction_block_keeper(self.transaction_block_keeper)
             .with_max_persisted_states(self.max_persisted_states)
             .with_optimism(self.evm_opts.optimism)
+            .with_alphanet(self.evm_opts.alphanet)
             .with_disable_default_create2_deployer(self.evm_opts.disable_default_create2_deployer)
             .with_slots_in_an_epoch(self.slots_in_an_epoch)
-            .with_memory_limit(self.evm_opts.memory_limit)
+            .with_memory_limit(self.evm_opts.memory_limit))
     }
 
     fn account_generator(&self) -> AccountGenerator {
@@ -293,8 +315,9 @@ impl NodeArgs {
         let dump_state = self.dump_state_path();
         let dump_interval =
             self.state_interval.map(Duration::from_secs).unwrap_or(DEFAULT_DUMP_INTERVAL);
+        let preserve_historical_states = self.preserve_historical_states;
 
-        let (api, mut handle) = crate::try_spawn(self.into_node_config()).await?;
+        let (api, mut handle) = crate::try_spawn(self.into_node_config()?).await?;
 
         // sets the signal handler to gracefully shutdown.
         let mut fork = api.get_fork();
@@ -307,7 +330,8 @@ impl NodeArgs {
         let task_manager = handle.task_manager();
         let mut on_shutdown = task_manager.on_shutdown();
 
-        let mut state_dumper = PeriodicStateDumper::new(api, dump_state, dump_interval);
+        let mut state_dumper =
+            PeriodicStateDumper::new(api, dump_state, dump_interval, preserve_historical_states);
 
         task_manager.spawn(async move {
             // wait for the SIGTERM signal on unix systems
@@ -550,6 +574,10 @@ pub struct AnvilEvmArgs {
     /// The memory limit per EVM execution in bytes.
     #[arg(long)]
     pub memory_limit: Option<u64>,
+
+    /// Enable Alphanet features
+    #[arg(long, visible_alias = "alphanet")]
+    pub alphanet: bool,
 }
 
 /// Resolves an alias passed as fork-url to the matching url defined in the rpc_endpoints section
@@ -571,11 +599,17 @@ struct PeriodicStateDumper {
     in_progress_dump: Option<Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>>,
     api: EthApi,
     dump_state: Option<PathBuf>,
+    preserve_historical_states: bool,
     interval: Interval,
 }
 
 impl PeriodicStateDumper {
-    fn new(api: EthApi, dump_state: Option<PathBuf>, interval: Duration) -> Self {
+    fn new(
+        api: EthApi,
+        dump_state: Option<PathBuf>,
+        interval: Duration,
+        preserve_historical_states: bool,
+    ) -> Self {
         let dump_state = dump_state.map(|mut dump_state| {
             if dump_state.is_dir() {
                 dump_state = dump_state.join("state.json");
@@ -585,19 +619,19 @@ impl PeriodicStateDumper {
 
         // periodically flush the state
         let interval = tokio::time::interval_at(Instant::now() + interval, interval);
-        Self { in_progress_dump: None, api, dump_state, interval }
+        Self { in_progress_dump: None, api, dump_state, preserve_historical_states, interval }
     }
 
     async fn dump(&self) {
         if let Some(state) = self.dump_state.clone() {
-            Self::dump_state(self.api.clone(), state).await
+            Self::dump_state(self.api.clone(), state, self.preserve_historical_states).await
         }
     }
 
     /// Infallible state dump
-    async fn dump_state(api: EthApi, dump_state: PathBuf) {
+    async fn dump_state(api: EthApi, dump_state: PathBuf, preserve_historical_states: bool) {
         trace!(path=?dump_state, "Dumping state on shutdown");
-        match api.serialized_state().await {
+        match api.serialized_state(preserve_historical_states).await {
             Ok(state) => {
                 if let Err(err) = foundry_common::fs::write_json_file(&dump_state, &state) {
                     error!(?err, "Failed to dump state");
@@ -638,7 +672,8 @@ impl Future for PeriodicStateDumper {
             if this.interval.poll_tick(cx).is_ready() {
                 let api = this.api.clone();
                 let path = this.dump_state.clone().expect("exists; see above");
-                this.in_progress_dump = Some(Box::pin(Self::dump_state(api, path)));
+                this.in_progress_dump =
+                    Some(Box::pin(Self::dump_state(api, path, this.preserve_historical_states)));
             } else {
                 break
             }
@@ -734,6 +769,8 @@ fn duration_from_secs_f64(s: &str) -> Result<Duration, String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::EthereumHardfork;
+
     use super::*;
     use std::{env, net::Ipv4Addr};
 
@@ -768,9 +805,25 @@ mod tests {
     }
 
     #[test]
-    fn can_parse_hardfork() {
+    fn can_parse_ethereum_hardfork() {
         let args: NodeArgs = NodeArgs::parse_from(["anvil", "--hardfork", "berlin"]);
-        assert_eq!(args.hardfork, Some(Hardfork::Berlin));
+        let config = args.into_node_config().unwrap();
+        assert_eq!(config.hardfork, Some(EthereumHardfork::Berlin.into()));
+    }
+
+    #[test]
+    fn can_parse_optimism_hardfork() {
+        let args: NodeArgs =
+            NodeArgs::parse_from(["anvil", "--optimism", "--hardfork", "Regolith"]);
+        let config = args.into_node_config().unwrap();
+        assert_eq!(config.hardfork, Some(OptimismHardfork::Regolith.into()));
+    }
+
+    #[test]
+    fn cant_parse_invalid_hardfork() {
+        let args: NodeArgs = NodeArgs::parse_from(["anvil", "--hardfork", "Regolith"]);
+        let config = args.into_node_config();
+        assert!(config.is_err());
     }
 
     #[test]
