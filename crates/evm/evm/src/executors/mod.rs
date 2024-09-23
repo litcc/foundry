@@ -31,7 +31,6 @@ use revm::{
         BlockEnv, Bytecode, Env, EnvWithHandlerCfg, ExecutionResult, Output, ResultAndState,
         SpecId, TxEnv, TxKind,
     },
-    Inspector,
 };
 use std::{borrow::Cow, collections::HashMap};
 

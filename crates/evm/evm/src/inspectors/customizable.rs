@@ -33,7 +33,7 @@ pub struct InnerEvmContextWrap<'a, 'b> {
     pub journaled_state: &'a mut revm::JournaledState,
     pub db: &'a mut (dyn Database<Error = DatabaseError> + 'b),
     pub error: &'b mut Result<(), EVMError<DatabaseError>>,
-    #[cfg(feature = "optimism")]
+    #[cfg(feature = "rem/optimism")]
     pub l1_block_info: &'b mut Option<crate::optimism::L1BlockInfo>,
 }
 
@@ -302,7 +302,7 @@ impl Customizable {
             journaled_state: &mut context.inner.journaled_state,
             db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
             error: &mut context.inner.error,
-            #[cfg(feature = "optimism")]
+            #[cfg(feature = "rem/optimism")]
             l1_block_info: &mut data.l1_block_info,
         };
         evm_context

@@ -438,7 +438,10 @@ impl InspectorStack {
     pub fn collect(self) -> InspectorData {
         let Self {
             mut cheatcodes,
-            inner: InspectorStackInner { chisel_state, coverage, log_collector, tracer, .. },
+            inner:
+                InspectorStackInner {
+                    chisel_state, coverage, log_collector, tracer, customizable, ..
+                },
         } = self;
 
         let traces = tracer.map(|tracer| tracer.into_traces()).map(|arena| {
@@ -675,7 +678,13 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn step_end(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<DB>) {
         call_inspectors_adjust_depth!(
-            [&mut self.customizable, &mut self.tracer, &mut self.cheatcodes, &mut self.chisel_state, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.chisel_state,
+                &mut self.printer
+            ],
             |inspector| inspector.step_end(interpreter, ecx),
             self,
             ecx
@@ -684,7 +693,13 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
     fn log(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<DB>, log: &Log) {
         call_inspectors_adjust_depth!(
-            [&mut self.customizable, &mut self.tracer, &mut self.log_collector, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.cheatcodes,
+                &mut self.printer
+            ],
             |inspector| inspector.log(interpreter, ecx, log),
             self,
             ecx
@@ -699,7 +714,13 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
 
         call_inspectors_adjust_depth!(
             #[ret]
-            [&mut self.customizable, &mut self.fuzzer, &mut self.tracer, &mut self.log_collector, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.fuzzer,
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.printer
+            ],
             |inspector| {
                 let mut out = None;
                 if let Some(output) = inspector.call(ecx, call) {
@@ -928,9 +949,10 @@ impl<'a, DB: DatabaseExt> Inspector<DB> for InspectorStackRefMut<'a> {
     }
 
     fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        call_inspectors!([&mut self.customizable, &mut self.tracer, &mut self.printer], |inspector| {
-            Inspector::<DB>::selfdestruct(inspector, contract, target, value)
-        });
+        call_inspectors!(
+            [&mut self.customizable, &mut self.tracer, &mut self.printer],
+            |inspector| { Inspector::<DB>::selfdestruct(inspector, contract, target, value) }
+        );
     }
 }
 
