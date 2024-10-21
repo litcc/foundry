@@ -523,7 +523,7 @@ impl InspectorStackRefMut<'_> {
         let result = outcome.result.result;
         call_inspectors!(
             #[ret]
-            [&mut self.tracer, &mut self.cheatcodes, &mut self.printer],
+            [&mut self.customizable, &mut self.tracer, &mut self.cheatcodes, &mut self.printer],
             |inspector| {
                 let new_outcome = inspector.create_end(ecx, call, outcome.clone());
 
@@ -548,7 +548,7 @@ impl InspectorStackRefMut<'_> {
         let result = outcome.result.result;
         call_inspectors!(
             #[ret]
-            [&mut self.tracer, &mut self.cheatcodes, &mut self.printer],
+            [&mut self.customizable, &mut self.tracer, &mut self.cheatcodes, &mut self.printer],
             |inspector| {
                 let new_outcome = inspector.eofcreate_end(ecx, call, outcome.clone());
 
@@ -764,6 +764,7 @@ impl Inspector<&mut dyn DatabaseExt> for InspectorStackRefMut<'_> {
     fn step(&mut self, interpreter: &mut Interpreter, ecx: &mut EvmContext<&mut dyn DatabaseExt>) {
         call_inspectors!(
             [
+                &mut self.customizable,
                 &mut self.fuzzer,
                 &mut self.tracer,
                 &mut self.coverage,
