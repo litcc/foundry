@@ -169,7 +169,7 @@ impl Customizable {
         let inspector = self.inspector.into_box_any().downcast::<T>();
         match inspector {
             Ok(d) => Some(*d),
-            Err(e) => None,
+            Err(_e) => None,
         }
     }
 }

@@ -241,6 +241,7 @@ pub struct InspectorData {
     pub coverage: Option<HitMaps>,
     pub cheatcodes: Option<Cheatcodes>,
     pub chisel_state: Option<(Vec<U256>, Vec<u8>, InstructionResult)>,
+    pub customizable: Option<Customizable>,
 }
 
 /// Contains data about the state of outer/main EVM which created and invoked the inner EVM context.
@@ -281,6 +282,7 @@ pub struct InspectorStackInner {
     pub log_collector: Option<LogCollector>,
     pub printer: Option<CustomPrintTracer>,
     pub tracer: Option<TracingInspector>,
+    pub customizable: Option<Customizable>,
     pub enable_isolation: bool,
     pub alphanet: bool,
 
@@ -426,7 +428,10 @@ impl InspectorStack {
     pub fn collect(self) -> InspectorData {
         let Self {
             mut cheatcodes,
-            inner: InspectorStackInner { chisel_state, coverage, log_collector, tracer, customizable, .. },
+            inner:
+                InspectorStackInner {
+                    chisel_state, coverage, log_collector, tracer, customizable, ..
+                },
         } = self;
 
         let traces = tracer.map(|tracer| tracer.into_traces()).map(|arena| {
@@ -487,7 +492,13 @@ impl InspectorStackRefMut<'_> {
         let result = outcome.result.result;
         call_inspectors!(
             #[ret]
-            [&mut self.customizable, &mut self.fuzzer, &mut self.tracer, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.fuzzer,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.printer
+            ],
             |inspector| {
                 let new_outcome = inspector.call_end(ecx, inputs, outcome.clone());
 
@@ -739,7 +750,13 @@ impl Inspector<&mut dyn DatabaseExt> for InspectorStackRefMut<'_> {
         ecx: &mut EvmContext<&mut dyn DatabaseExt>,
     ) {
         call_inspectors!(
-            [&mut self.customizable, &mut self.coverage, &mut self.tracer, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.coverage,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.printer
+            ],
             |inspector| inspector.initialize_interp(interpreter, ecx),
         );
     }
@@ -763,7 +780,13 @@ impl Inspector<&mut dyn DatabaseExt> for InspectorStackRefMut<'_> {
         ecx: &mut EvmContext<&mut dyn DatabaseExt>,
     ) {
         call_inspectors!(
-            [&mut self.customizable, &mut self.tracer, &mut self.cheatcodes, &mut self.chisel_state, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.tracer,
+                &mut self.cheatcodes,
+                &mut self.chisel_state,
+                &mut self.printer
+            ],
             |inspector| inspector.step_end(interpreter, ecx),
         );
     }
@@ -775,7 +798,13 @@ impl Inspector<&mut dyn DatabaseExt> for InspectorStackRefMut<'_> {
         log: &Log,
     ) {
         call_inspectors!(
-            [&mut self.customizable, &mut self.tracer, &mut self.log_collector, &mut self.cheatcodes, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.cheatcodes,
+                &mut self.printer
+            ],
             |inspector| inspector.log(interpreter, ecx, log),
         );
     }
@@ -796,7 +825,13 @@ impl Inspector<&mut dyn DatabaseExt> for InspectorStackRefMut<'_> {
 
         call_inspectors!(
             #[ret]
-            [&mut self.customizable, &mut self.fuzzer, &mut self.tracer, &mut self.log_collector, &mut self.printer],
+            [
+                &mut self.customizable,
+                &mut self.fuzzer,
+                &mut self.tracer,
+                &mut self.log_collector,
+                &mut self.printer
+            ],
             |inspector| {
                 let mut out = None;
                 if let Some(output) = inspector.call(ecx, call) {
@@ -994,9 +1029,12 @@ impl Inspector<&mut dyn DatabaseExt> for InspectorStackRefMut<'_> {
     }
 
     fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        call_inspectors!([&mut self.customizable, &mut self.tracer, &mut self.printer], |inspector| {
-            Inspector::<&mut dyn DatabaseExt>::selfdestruct(inspector, contract, target, value)
-        });
+        call_inspectors!(
+            [&mut self.customizable, &mut self.tracer, &mut self.printer],
+            |inspector| {
+                Inspector::<&mut dyn DatabaseExt>::selfdestruct(inspector, contract, target, value)
+            }
+        );
     }
 }
 
