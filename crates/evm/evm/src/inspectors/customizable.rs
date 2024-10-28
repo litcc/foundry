@@ -33,8 +33,7 @@ pub struct InnerEvmContextWrap<'a, 'b> {
     pub journaled_state: &'a mut revm::JournaledState,
     pub db: &'a mut (dyn Database<Error = DatabaseError> + 'b),
     pub error: &'b mut Result<(), EVMError<DatabaseError>>,
-    #[cfg(feature = "rem/optimism")]
-    pub l1_block_info: &'b mut Option<crate::optimism::L1BlockInfo>,
+    // pub l1_block_info: &'b mut Option<revm::optimism::L1BlockInfo>,
 }
 
 // pub struct EvmContextWrap<'a, 'b: 'a> {
@@ -98,7 +97,13 @@ pub trait CustomizableInspector: Any + Send + Sync {
     /// InstructionResulting anything other than [crate::interpreter::InstructionResult::Continue]
     /// overrides the result of the call.
     #[inline]
-    fn call(&mut self, _context: InnerEvmContextWrap<'_, '_>, _inputs: &mut CallInputs) {}
+    fn call(
+        &mut self,
+        _context: InnerEvmContextWrap<'_, '_>,
+        _inputs: &mut CallInputs,
+    ) -> Option<CallOutcome> {
+        None
+    }
 
     /// Called when a call to a contract has concluded.
     ///
@@ -110,8 +115,9 @@ pub trait CustomizableInspector: Any + Send + Sync {
         &mut self,
         _context: InnerEvmContextWrap<'_, '_>,
         _inputs: &CallInputs,
-        _outcome: &CallOutcome,
-    ) {
+        outcome: CallOutcome,
+    ) -> CallOutcome {
+        outcome
     }
 
     /// Called when a contract is about to be created.
@@ -121,7 +127,13 @@ pub trait CustomizableInspector: Any + Send + Sync {
     ///
     /// If this returns `None` then the creation proceeds as normal.
     #[inline]
-    fn create(&mut self, _context: InnerEvmContextWrap<'_, '_>, _inputs: &mut CreateInputs) {}
+    fn create(
+        &mut self,
+        _context: InnerEvmContextWrap<'_, '_>,
+        _inputs: &mut CreateInputs,
+    ) -> Option<CreateOutcome> {
+        None
+    }
 
     /// Called when a contract has been created.
     ///
@@ -132,22 +144,30 @@ pub trait CustomizableInspector: Any + Send + Sync {
         &mut self,
         _context: InnerEvmContextWrap<'_, '_>,
         _inputs: &CreateInputs,
-        _outcome: &CreateOutcome,
-    ) {
+        outcome: CreateOutcome,
+    ) -> CreateOutcome {
+        outcome
     }
 
     /// Called when EOF creating is called.
     ///
     /// This can happen from create TX or from EOFCREATE opcode.
-    fn eofcreate(&mut self, _context: InnerEvmContextWrap<'_, '_>, _inputs: &mut EOFCreateInputs) {}
+    fn eofcreate(
+        &mut self,
+        _context: InnerEvmContextWrap<'_, '_>,
+        _inputs: &mut EOFCreateInputs,
+    ) -> Option<CreateOutcome> {
+        None
+    }
 
     /// Called when eof creating has ended.
     fn eofcreate_end(
         &mut self,
         _context: InnerEvmContextWrap<'_, '_>,
         _inputs: &EOFCreateInputs,
-        _outcome: &CreateOutcome,
-    ) {
+        _outcome: CreateOutcome,
+    ) -> CreateOutcome {
+        _outcome
     }
 
     /// Called when a contract has been self-destructed with funds transferred to target.
@@ -229,9 +249,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         inputs: &mut CallInputs,
     ) -> Option<CallOutcome> {
         let evm_context = Self::inner_evm_context(context);
-        self.inspector.call(evm_context, inputs);
-
-        None
+        self.inspector.call(evm_context, inputs)
     }
 
     fn call_end(
@@ -241,8 +259,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         outcome: CallOutcome,
     ) -> CallOutcome {
         let evm_context = Self::inner_evm_context(context);
-        self.inspector.call_end(evm_context, inputs, &outcome);
-        outcome
+        self.inspector.call_end(evm_context, inputs, outcome)
     }
 
     fn create(
@@ -251,9 +268,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         inputs: &mut CreateInputs,
     ) -> Option<CreateOutcome> {
         let evm_context = Self::inner_evm_context(context);
-        self.inspector.create(evm_context, inputs);
-
-        None
+        self.inspector.create(evm_context, inputs)
     }
 
     fn create_end(
@@ -263,8 +278,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         outcome: CreateOutcome,
     ) -> CreateOutcome {
         let evm_context = Self::inner_evm_context(context);
-        self.inspector.create_end(evm_context, inputs, &outcome);
-        outcome
+        self.inspector.create_end(evm_context, inputs, outcome)
     }
 
     fn eofcreate(
@@ -273,8 +287,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         inputs: &mut EOFCreateInputs,
     ) -> Option<CreateOutcome> {
         let evm_context = Self::inner_evm_context(context);
-        self.inspector.eofcreate(evm_context, inputs);
-        None
+        self.inspector.eofcreate(evm_context, inputs)
     }
 
     fn eofcreate_end(
@@ -284,8 +297,7 @@ impl<DB: Database<Error = DatabaseError>> Inspector<DB> for Customizable {
         outcome: CreateOutcome,
     ) -> CreateOutcome {
         let evm_context = Self::inner_evm_context(context);
-        self.inspector.eofcreate_end(evm_context, inputs, &outcome);
-        outcome
+        self.inspector.eofcreate_end(evm_context, inputs, outcome)
     }
 
     fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
@@ -302,8 +314,7 @@ impl Customizable {
             journaled_state: &mut context.inner.journaled_state,
             db: &mut context.inner.db as &mut (dyn Database<Error = DatabaseError>),
             error: &mut context.inner.error,
-            #[cfg(feature = "rem/optimism")]
-            l1_block_info: &mut data.l1_block_info,
+            // l1_block_info: &mut context.l1_block_info,
         };
         evm_context
     }
