@@ -664,7 +664,7 @@ pub enum EvmError {
     Skip(SkipReason),
     /// Any other error.
     #[error(transparent)]
-    Eyre(#[from] eyre::Error),
+    Eyre(eyre::Error),
 }
 
 impl From<ExecutionErr> for EvmError {
@@ -676,6 +676,16 @@ impl From<ExecutionErr> for EvmError {
 impl From<alloy_sol_types::Error> for EvmError {
     fn from(err: alloy_sol_types::Error) -> Self {
         Self::Abi(err.into())
+    }
+}
+
+impl From<eyre::Error> for EvmError {
+    fn from(err: eyre::Report) -> Self {
+        let mut chained_cause = String::new();
+        for cause in err.chain() {
+            chained_cause.push_str(format!("{cause}; ").as_str());
+        }
+        Self::Eyre(eyre::format_err!("{chained_cause}"))
     }
 }
 
